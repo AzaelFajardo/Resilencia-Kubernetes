@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+
+  notification-service:
+    build: ./services/notification-service
+    ports:
+      - "8001:8000"
+
+  payment-service:
+    build: ./services/payment-service
+    ports:
+      - "8002:8000"
+
+  order-service:
+    build: ./services/order-service
+    ports:
+      - "8003:8000"
+    depends_on:
+      - payment-service
+      - notification-service
