@@ -1,1 +1,4 @@
-#Librerias que se necesitan para el servicio de ordenes en python
+# Framework web para exponer endpoints HTTP del microservicio.
+fastapi
+# Servidor ASGI usado para ejecutar FastAPI.
+uvicorn
