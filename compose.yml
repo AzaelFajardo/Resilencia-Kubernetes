@@ -1,0 +1,140 @@
+# -----------------------------------------------------------------------
+# compose.yml -- Entorno local de desarrollo y prueba
+# Uso:
+#   docker-compose up --build          -> levantar todo
+#   docker-compose down -v             -> bajar y limpiar volumenes
+#   docker-compose logs -f order-service -> ver logs de un servicio INDIVIDUAL
+# -----------------------------------------------------------------------
+
+services:
+
+  # -- Microservicios ---------------------------------------------------
+
+  user-service:
+    build: ./services/user-service
+    ports:
+      - "8001:8000"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      FAILURE_RATE:  ${FAILURE_RATE:-0.0}
+      LATENCY_MS:    ${LATENCY_MS:-0}
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  inventory-service:
+    build: ./services/inventory-service
+    ports:
+      - "8002:8000"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      FAILURE_RATE:  ${FAILURE_RATE:-0.0}
+      LATENCY_MS:    ${LATENCY_MS:-0}
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  payment-service:
+    build: ./services/payment-service
+    ports:
+      - "8003:8000"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      FAILURE_RATE:  ${FAILURE_RATE:-0.0}
+      LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  notification-service:
+    build: ./services/notification-service
+    ports:
+      - "8004:8000"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      FAILURE_RATE:  ${FAILURE_RATE:-0.0}
+      LATENCY_MS:    ${LATENCY_MS:-0}
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  order-service:
+    build: ./services/order-service
+    ports:
+      - "8000:8000"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT:  http://otel-collector:4317
+      USER_SERVICE_URL:              http://user-service:8000
+      INVENTORY_SERVICE_URL:         http://inventory-service:8000
+      PAYMENT_SERVICE_URL:           http://payment-service:8000
+      NOTIFICATION_SERVICE_URL:      http://notification-service:8000
+      RETRY_ENABLED:  ${RETRY_ENABLED:-false}
+      RETRY_COUNT:    ${RETRY_COUNT:-3}
+      RETRY_DELAY_MS: ${RETRY_DELAY_MS:-100}
+      HTTP_TIMEOUT:   ${HTTP_TIMEOUT:-5.0}
+    depends_on:
+      user-service:         {condition: service_healthy}
+      inventory-service:    {condition: service_healthy}
+      payment-service:      {condition: service_healthy}
+      notification-service: {condition: service_healthy}
+    networks: [app-net]
+
+  # -- Observabilidad ---------------------------------------------------
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.99.0
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel-collector.yaml
+    command: ["--config=/etc/otel-collector.yaml"]
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+      - "8889:8889"   # Prometheus exporter
+    networks: [app-net]
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks: [app-net]
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks: [app-net]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # UI
+      - "14250:14250"   # gRPC legacy
+    networks: [app-net]
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  grafana-data:
