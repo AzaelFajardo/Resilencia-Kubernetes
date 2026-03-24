@@ -27,3 +27,7 @@ Sirve como recordatorio de los ajustes pendientes para integrarlo con el resto d
 - `GET /health`
 - `GET /inventory/{product_id}`
 - `GET /inventory/{product_id}/availability`
+
+## Autor
+
+- Uriel Ortiz
