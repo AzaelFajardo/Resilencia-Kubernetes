@@ -1,59 +1,78 @@
-Microservicio: Payment Service
-1. Descripción
+# Microservice: Payment Service
 
-El Payment Service es un microservicio encargado de simular el procesamiento de pagos dentro del sistema. Este servicio incluye mecanismos para simular fallos y latencia, lo cual es fundamental para pruebas de resiliencia.
+## 1. Description
 
-2. Objetivo
+The Payment Service is a microservice responsible for simulating payment processing within the system. This service includes mechanisms to simulate failures and latency, which is essential for resilience testing.
 
-Simular un servicio crítico que puede fallar, permitiendo evaluar el comportamiento del sistema ante errores.
+## 2. Objective
 
-3. Funcionalidad
+Simulate a critical service that can fail, allowing evaluation of the system behavior when errors occur.
 
-Este servicio permite:
+## 3. Functionality
 
-Procesar solicitudes de pago
-Simular retrasos en la respuesta
-Generar fallos aleatorios
-4. Endpoint disponible
-GET /pay
-Descripción:
+This service allows:
 
-Procesa una solicitud de pago de manera simulada.
+- Processing payment requests
+- Simulating delayed responses
+- Generating random failures
 
-Comportamiento:
-Existe una probabilidad del 30% de fallo
-Se introduce una latencia aleatoria
-Respuestas:
+## 4. Available Endpoint
 
-Éxito:
+`GET /pay`
 
+Description:
+
+Processes a payment request in a simulated way.
+
+Behavior:
+
+- There is a 30% probability of failure
+- Random latency is introduced
+
+Responses:
+
+Success:
+
+```json
 {
   "status": "success",
   "message": "Payment processed"
 }
+```
 
 Error:
 
+```json
 {
   "status": "error",
   "message": "Payment failed"
 }
-5. Tecnologías utilizadas
-Python
-FastAPI
-Uvicorn
-6. Ejecución
+```
+
+## 5. Technologies Used
+
+- Python
+- FastAPI
+- Uvicorn
+
+## 6. Execution
+
 Local:
+
+```bash
 python -m uvicorn main:app --reload --port 8002
+```
+
 Docker:
 
-Se ejecuta en un contenedor con puerto interno 8000.
+It runs in a container with internal port 8000.
 
-7. Rol en la arquitectura
+## 7. Role in the Architecture
 
-Este servicio es utilizado por el Order Service para validar y procesar pagos antes de completar una orden.
+This service is used by the Order Service to validate and process payments before completing an order.
 
-8. Características de resiliencia
-Fallos simulados
-Latencia artificial
-Comportamiento no determinista
+## 8. Resilience Features
+
+- Simulated failures
+- Artificial latency
+- Non-deterministic behavior

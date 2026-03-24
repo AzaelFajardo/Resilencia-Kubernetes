@@ -1,4 +1,6 @@
-#Librerias que se necesitan para el servicio de ordenes en python
+# Web framework used to expose the order-service endpoints.
 fastapi
+# ASGI server used to run the FastAPI application.
 uvicorn
+# Async HTTP client used by the orchestrator to call dependent services.
 httpx

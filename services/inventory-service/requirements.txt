@@ -1,4 +1,4 @@
-# Framework web para exponer endpoints HTTP del microservicio.
+# Web framework used to expose the microservice HTTP endpoints.
 fastapi
-# Servidor ASGI usado para ejecutar FastAPI.
+# ASGI server used to run FastAPI.
 uvicorn

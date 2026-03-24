@@ -1,8 +1,9 @@
+# Global scrape settings for the local observability stack.
 global:
   scrape_interval: 10s
 
 scrape_configs:
-  # Obtiene las metricas que expone el otel-collector en el puerto del exporter prometheus
+  # Scrapes the metrics exposed by the otel-collector on the Prometheus exporter port.
   - job_name: otel-collector
     static_configs:
       - targets: ["otel-collector:8889"]

@@ -1,44 +1,44 @@
-# User Service – Integration Notes
+# User Service - Integration Notes
 
-## Objetivo
-Documento de referencia para la integración futura de `user-service` con el resto de los microservicios.  
-No afecta el funcionamiento actual del servicio.
-
----
-
-## Cambios externos pendientes
-
-- Actualizar `docker-compose.yml` para incluir `user-service` en el flujo local.
-- Ajustar `order-service` u otros servicios para validar usuarios antes de procesar operaciones.
-- Definir variables de entorno / URLs internas en el orquestador (Docker / Kubernetes).
-- Integrar `user-service` con servicios que requieran autenticación o validación de usuarios.
-- Agregar manifiestos de Kubernetes o valores de Helm para despliegue en Minikube.
-- Configurar probes de Kubernetes usando `GET /health`.
-- Exponer el servicio mediante un `Service` en el puerto `8000`.
-- Implementar pruebas de integración.
-- Implementar pruebas de carga.
+## Objective
+Reference document for the future integration of `user-service` with the rest of the microservices.
+It does not affect the current behavior of the service.
 
 ---
 
-## Límites actuales del microservicio
+## Pending External Changes
 
-- Solo consulta usuarios por ID.
-- Solo valida si un usuario existe y está activo.
-- No crea usuarios.
-- No actualiza usuarios.
-- No elimina usuarios.
-- No usa base de datos (datos en memoria).
-- No maneja autenticación real (tokens, JWT, etc.).
-- No comparte estado entre instancias.
+- Update `docker-compose.yml` to include `user-service` in the local flow.
+- Adjust `order-service` or other services to validate users before processing operations.
+- Define environment variables or internal URLs in the orchestrator (Docker / Kubernetes).
+- Integrate `user-service` with services that require authentication or user validation.
+- Add Kubernetes manifests or Helm values for deployment in Minikube.
+- Configure Kubernetes probes using `GET /health`.
+- Expose the service through a `Service` on port `8000`.
+- Implement integration tests.
+- Implement load tests.
 
 ---
 
-## Endpoints disponibles
+## Current Microservice Limits
+
+- It only looks up users by ID.
+- It only validates whether a user exists and is active.
+- It does not create users.
+- It does not update users.
+- It does not delete users.
+- It does not use a database (in-memory data).
+- It does not handle real authentication (tokens, JWT, etc.).
+- It does not share state across instances.
+
+---
+
+## Available Endpoints
 
 - `GET /health`
 - `GET /users/{user_id}`
 - `GET /users/{user_id}/validate`
 
-## Autor
+## Author
 
 - Uriel Ortiz

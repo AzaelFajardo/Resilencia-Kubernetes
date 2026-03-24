@@ -1,7 +1,7 @@
-#Nombre de la prueba
+# Test Name
 
-#Cuando se realizo
+# When It Was Run
 
-#descripccion
+# Description
 
-#resultados
+# Results
