@@ -2,20 +2,20 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 
-# Inicializa la aplicacion FastAPI del microservicio.
-# Este servicio se mantiene pequeno y stateless para consultar productos y revisar disponibilidad.
+# Initializes the FastAPI application for this microservice.
+# This service stays small and stateless to look up products and check availability.
 app = FastAPI(title="inventory-service")
 
 
-# Modelo de respuesta para el endpoint de salud.
-# Permite verificar de forma simple que el servicio esta levantado y responde correctamente.
+# Response model for the health endpoint.
+# It provides a simple way to verify that the service is running and responding correctly.
 class HealthResponse(BaseModel):
     status: str
     service: str
 
 
-# Modelo base de producto para esta fase inicial.
-# Solo incluye los campos minimos necesarios para consulta y disponibilidad.
+# Base product model for this initial phase.
+# It only includes the minimum fields needed for lookup and availability.
 class Product(BaseModel):
     id: int
     name: str
@@ -24,8 +24,8 @@ class Product(BaseModel):
     stock: int
 
 
-# Modelo de respuesta para disponibilidad.
-# Devuelve el resultado booleano y tambien el producto consultado para facilitar futuras integraciones.
+# Response model for availability.
+# It returns the boolean result and the requested product to simplify future integrations.
 class ProductAvailabilityResponse(BaseModel):
     available: bool
     product_id: int
@@ -33,9 +33,9 @@ class ProductAvailabilityResponse(BaseModel):
     product: Product
 
 
-# Fuente de datos simulada en memoria.
-# Se usa para evitar base de datos en esta fase y mantener el microservicio facil de probar.
-# Incluye productos con stock, sin stock y uno adicional para pruebas manuales.
+# Simulated in-memory data source.
+# It avoids a database in this phase and keeps the microservice easy to test.
+# It includes products with stock, without stock, and one extra item for manual checks.
 PRODUCTS: dict[int, Product] = {
     1: Product(
         id=1,
@@ -61,8 +61,8 @@ PRODUCTS: dict[int, Product] = {
 }
 
 
-# Funcion auxiliar que centraliza la busqueda por ID.
-# Reutiliza la misma regla de negocio para ambos endpoints y devuelve 404 si el producto no existe.
+# Helper function that centralizes lookup by ID.
+# It reuses the same business rule for both endpoints and returns 404 when the product does not exist.
 def get_product_or_404(product_id: int) -> Product:
     product = PRODUCTS.get(product_id)
     if product is None:
@@ -70,23 +70,23 @@ def get_product_or_404(product_id: int) -> Product:
     return product
 
 
-# Endpoint de salud para probes de Kubernetes o verificaciones basicas.
-# Devuelve una respuesta minima con el nombre del servicio y su estado.
+# Health endpoint for Kubernetes probes or basic checks.
+# It returns a minimal response with the service name and its status.
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", service="inventory-service")
 
 
-# Endpoint para consultar un producto por ID.
-# Si el producto existe, devuelve su informacion completa; si no, responde con 404.
+# Endpoint that retrieves a product by ID.
+# If the product exists, it returns the full object; otherwise, it responds with 404.
 @app.get("/inventory/{product_id}", response_model=Product)
 def get_product(product_id: int) -> Product:
     return get_product_or_404(product_id)
 
 
-# Endpoint para verificar si un producto existe y tiene stock disponible.
-# Mantiene 200 OK cuando el producto existe, incluso si no hay stock, porque la consulta fue resuelta correctamente.
-# Solo usa 404 cuando el producto solicitado no existe en la fuente de datos simulada.
+# Endpoint that checks whether a product exists and has stock available.
+# It keeps 200 OK when the product exists, even if stock is empty, because the request was resolved correctly.
+# It only uses 404 when the requested product does not exist in the simulated data source.
 @app.get(
     "/inventory/{product_id}/availability",
     response_model=ProductAvailabilityResponse,
@@ -94,7 +94,7 @@ def get_product(product_id: int) -> Product:
 def check_availability(product_id: int) -> ProductAvailabilityResponse:
     product = get_product_or_404(product_id)
 
-    # Si el stock es mayor que cero, se informa disponibilidad positiva.
+    # If stock is greater than zero, positive availability is reported.
     if product.stock > 0:
         return ProductAvailabilityResponse(
             available=True,
@@ -103,7 +103,7 @@ def check_availability(product_id: int) -> ProductAvailabilityResponse:
             product=product,
         )
 
-    # Si el producto existe pero no tiene stock, se devuelve disponibilidad negativa sin error HTTP.
+    # If the product exists but has no stock, negative availability is returned without an HTTP error.
     return ProductAvailabilityResponse(
         available=False,
         product_id=product_id,

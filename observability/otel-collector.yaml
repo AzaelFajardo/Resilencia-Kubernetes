@@ -1,3 +1,4 @@
+# Receives telemetry from the microservices over OTLP.
 receivers:
   otlp:
     protocols:
@@ -6,21 +7,23 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+# Applies batch processing before exporting telemetry.
 processors:
   batch:
 
 exporters:
-  # Envia trazas a Jaeger via OTLP 
+  # Sends traces to Jaeger through OTLP.
   otlp/jaeger:
     endpoint: jaeger:4317
     tls:
       insecure: true
-  # Expone metricas para que Prometheus las obtenga
+  # Exposes metrics so Prometheus can scrape them.
   prometheus:
     endpoint: "0.0.0.0:8889"
   debug:
     verbosity: basic
 
+# Defines the telemetry pipelines used by the collector.
 service:
   pipelines:
     traces:

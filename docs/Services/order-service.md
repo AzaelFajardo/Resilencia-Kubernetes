@@ -1,71 +1,92 @@
-Microservicio: Order Service
-1. Descripción
+# Microservice: Order Service
 
-El Order Service es el microservicio principal del sistema. Se encarga de gestionar la creación de órdenes y coordinar la comunicación con otros servicios.
+## 1. Description
 
-2. Objetivo
+The Order Service is the main microservice in the system. It is responsible for managing order creation and coordinating communication with other services.
 
-Orquestar el flujo completo de una orden, integrando el procesamiento de pagos y el envío de notificaciones.
+## 2. Objective
 
-3. Funcionalidad
+Orchestrate the full order flow, integrating payment processing and notification delivery.
 
-Este servicio realiza:
+## 3. Functionality
 
-Recepción de solicitudes de órdenes
-Comunicación con el Payment Service
-Comunicación con el Notification Service
-Manejo de errores
-4. Endpoint disponible
-GET /order
-Descripción:
+This service performs:
 
-Crea una orden y ejecuta el flujo completo del sistema.
+- Receipt of order requests
+- Communication with the Payment Service
+- Communication with the Notification Service
+- Error handling
 
-5. Flujo de operación
-Se recibe la solicitud
-Se envía petición al Payment Service
-Si el pago falla - se retorna error
-Si el pago es exitoso - se envía notificación
-Se retorna el resultado final
-6. Respuestas posibles
+## 4. Available Endpoint
 
-Orden completada:
+`GET /order`
 
+Description:
+
+Creates an order and executes the full system flow.
+
+## 5. Operation Flow
+
+- The request is received
+- A request is sent to the Payment Service
+- If the payment fails, an error is returned
+- If the payment succeeds, a notification is sent
+- The final result is returned
+
+## 6. Possible Responses
+
+Order completed:
+
+```json
 {
   "status": "success",
   "message": "Order completed"
 }
+```
 
-Fallo en pago:
+Payment failure:
 
+```json
 {
   "status": "error",
   "message": "Payment failed"
 }
+```
 
-Fallo en notificación:
+Notification failure:
 
+```json
 {
   "status": "warning",
   "message": "Order created but notification failed"
 }
-7. Tecnologías utilizadas
-Python
-FastAPI
-Uvicorn
-HTTPX
-8. Ejecución
+```
+
+## 7. Technologies Used
+
+- Python
+- FastAPI
+- Uvicorn
+- HTTPX
+
+## 8. Execution
+
 Local:
+
+```bash
 python -m uvicorn main:app --reload --port 8003
+```
+
 Docker:
 
-Se ejecuta como contenedor y se comunica con otros servicios mediante red interna.
+It runs as a container and communicates with other services through the internal network.
 
-9. Rol en la arquitectura
+## 9. Role in the Architecture
 
-Es el núcleo del sistema, encargado de coordinar todos los procesos y garantizar que el flujo de negocio se ejecute correctamente.
+It is the core of the system, responsible for coordinating all processes and ensuring that the business flow runs correctly.
 
-10. Manejo de errores
-Detecta fallos en el servicio de pagos
-Maneja errores de comunicación
-Permite resultados parciales
+## 10. Error Handling
+
+- Detects failures in the payment service
+- Handles communication errors
+- Allows partial results

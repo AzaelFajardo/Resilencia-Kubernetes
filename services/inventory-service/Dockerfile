@@ -1,18 +1,18 @@
 FROM python:3.12-slim
 
-# Define el directorio de trabajo dentro del contenedor.
+# Defines the working directory inside the container.
 WORKDIR /app
 
-# Copia primero el archivo de dependencias para aprovechar mejor la cache de Docker.
+# Copies the dependency file first to make better use of the Docker cache.
 COPY requirements.txt .
-# Instala solo lo necesario para ejecutar este microservicio.
+# Installs only what is required to run this microservice.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia el codigo del servicio al contenedor.
+# Copies the service code into the container.
 COPY . .
 
-# Expone el puerto interno esperado por FastAPI/Uvicorn.
+# Exposes the internal port expected by FastAPI and Uvicorn.
 EXPOSE 8000
 
-# Inicia la aplicacion escuchando en todas las interfaces del contenedor.
+# Starts the application listening on all container interfaces.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

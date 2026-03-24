@@ -1,8 +1,8 @@
 # Resiliencia-Kubernetes
 
-Este proyecto es una simulación de microservicios para pruebas de resiliencia en Kubernetes.
+This project is a microservices simulation for resilience testing on Kubernetes.
 
-## Metodologia aplicada — Espiral Iteracion 1
-Esta iteracion corresponde a la fase de Desarrollo del Modelo Espiral.
-Se construyo la infraestructura base sin mecanismos de resiliencia,
-equivalente al escenario Baseline definido en el plan de pruebas.
+## Applied Methodology - Spiral Iteration 1
+This iteration corresponds to the Development phase of the Spiral Model.
+The base infrastructure was built without resilience mechanisms,
+equivalent to the baseline scenario defined in the test plan.

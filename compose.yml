@@ -1,14 +1,14 @@
 # -----------------------------------------------------------------------
-# compose.yml -- Entorno local de desarrollo y prueba
-# Uso:
-#   docker-compose up --build          -> levantar todo
-#   docker-compose down -v             -> bajar y limpiar volumenes
-#   docker-compose logs -f order-service -> ver logs de un servicio INDIVIDUAL
+# compose.yml -- Local development and test environment
+# Usage:
+#   docker-compose up --build            -> start everything
+#   docker-compose down -v               -> stop services and clean volumes
+#   docker-compose logs -f order-service -> view logs for a single service
 # -----------------------------------------------------------------------
 
 services:
 
-  # -- Microservicios ---------------------------------------------------
+  # -- Microservices ----------------------------------------------------
 
   user-service:
     build: ./services/user-service
@@ -92,7 +92,7 @@ services:
       notification-service: {condition: service_healthy}
     networks: [app-net]
 
-  # -- Observabilidad ---------------------------------------------------
+  # -- Observability ----------------------------------------------------
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.99.0
@@ -129,12 +129,14 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
       - "16686:16686"   # UI
-      - "14250:14250"   # gRPC legacy
+      - "14250:14250"   # Legacy gRPC
     networks: [app-net]
 
+# Shared bridge network for local service-to-service communication.
 networks:
   app-net:
     driver: bridge
 
+# Persistent volume used by Grafana to keep local state.
 volumes:
   grafana-data:
