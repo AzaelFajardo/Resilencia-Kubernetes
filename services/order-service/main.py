@@ -1,6 +1,8 @@
 # Main order-service logic.
 # This microservice acts as the central orchestrator for the order flow.
 from fastapi import FastAPI
+# This library automatically collects metrics such as request count, latency, and errors.
+from prometheus_fastapi_instrumentator import Instrumentator
 import httpx
 import os
 import asyncio
@@ -9,6 +11,10 @@ import asyncio
 # It exposes a health endpoint and the end-to-end order flow.
 app = FastAPI(title="order-service")
 
+# Instrument the FastAPI application to automatically collect metrics.
+# It tracks HTTP requests, response status codes, and request duration.
+# The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
+Instrumentator().instrument(app).expose(app)
 # Base URLs for dependent services.
 # They are loaded from Compose or fall back to local defaults.
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user-service:8000")

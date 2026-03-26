@@ -2,3 +2,5 @@
 fastapi
 # ASGI server used to run the FastAPI application.
 uvicorn
+
+prometheus-fastapi-instrumentator

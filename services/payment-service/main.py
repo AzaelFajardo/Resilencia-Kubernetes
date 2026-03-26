@@ -1,6 +1,8 @@
 # Main payment-service logic.
 # This service simulates payment processing and controlled failure scenarios.
 from fastapi import FastAPI
+# This library automatically collects metrics such as request count, latency, and errors.
+from prometheus_fastapi_instrumentator import Instrumentator
 import os
 import random
 import asyncio
@@ -9,6 +11,10 @@ import asyncio
 # It keeps the API small because this service only exposes health and payment endpoints.
 app = FastAPI(title="payment-service")
 
+# Instrument the FastAPI application to automatically collect metrics.
+# It tracks HTTP requests, response status codes, and request duration.
+# The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
+Instrumentator().instrument(app).expose(app)
 # Failure-injection variables loaded from Compose.
 # They control simulated errors, added latency, and timeouts.
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))

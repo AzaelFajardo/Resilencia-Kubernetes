@@ -1,11 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-
+# This library automatically collects metrics such as request count, latency, and errors.
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Initializes the FastAPI application for this microservice.
 # This service stays small and stateless to look up products and check availability.
 app = FastAPI(title="inventory-service")
 
+# Instrument the FastAPI application to automatically collect metrics.
+# It tracks HTTP requests, response status codes, and request duration.
+# The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
+Instrumentator().instrument(app).expose(app)
 
 # Response model for the health endpoint.
 # It provides a simple way to verify that the service is running and responding correctly.
