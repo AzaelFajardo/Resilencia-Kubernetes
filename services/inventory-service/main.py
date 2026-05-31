@@ -7,17 +7,28 @@ Every response is wrapped with the 20 global fields (metadata + security)
 to simulate a production-grade Amazon-like system.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import update
+from database import engine, Base, get_db, Product as DBProduct
+
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
 
 # ── FastAPI application ────────────────────────────────────────────────
-app = FastAPI(title="inventory-service")
+app = FastAPI(title="inventory-service", lifespan=lifespan)
 
 # Instrument the FastAPI application to automatically collect metrics.
 # It tracks HTTP requests, response status codes, and request duration.
@@ -243,12 +254,24 @@ def build_security(request: Request) -> SecurityContext:
     )
 
 
-def get_product_or_404(product_id: int) -> Product:
-    """Centralizes lookup by ID. Returns 404 if not found."""
-    product = PRODUCTS.get(product_id)
-    if product is None:
+async def get_db_product_or_404(product_id: int, db: AsyncSession) -> DBProduct:
+    result = await db.execute(select(DBProduct).filter(DBProduct.id == product_id))
+    db_product = result.scalars().first()
+    if db_product is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    return product
+    return db_product
+
+def construct_product_model(db_product: DBProduct) -> Product:
+    data = db_product.data.copy()
+    data['quantity'] = db_product.quantity
+    if hasattr(Product, "model_validate"):
+        return Product.model_validate(data)
+    return Product.parse_obj(data)
+
+async def get_product_or_404(product_id: int, db: AsyncSession) -> Product:
+    """Centralizes lookup by ID. Returns 404 if not found."""
+    db_product = await get_db_product_or_404(product_id, db)
+    return construct_product_model(db_product)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -261,10 +284,24 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service="inventory-service")
 
 
+@app.post("/inventory/generate")
+async def generate_inventory(db: AsyncSession = Depends(get_db)):
+    """Generates mock products in the database."""
+    count = 0
+    for pid, product in PRODUCTS.items():
+        result = await db.execute(select(DBProduct).filter(DBProduct.id == pid))
+        if not result.scalars().first():
+            data_dict = product.model_dump() if hasattr(product, "model_dump") else product.dict()
+            db.add(DBProduct(id=pid, quantity=product.quantity, data=data_dict))
+            count += 1
+    await db.commit()
+    return {"message": f"{count} products generated."}
+
+
 @app.get("/inventory/{product_id}", response_model=ProductResponse)
-def get_product(product_id: int, request: Request) -> ProductResponse:
+async def get_product(product_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> ProductResponse:
     """Retrieves a product by ID with full details and global fields."""
-    product = get_product_or_404(product_id)
+    product = await get_product_or_404(product_id, db)
     return ProductResponse(
         metadata=build_metadata(request),
         security=build_security(request),
@@ -276,13 +313,13 @@ def get_product(product_id: int, request: Request) -> ProductResponse:
     "/inventory/{product_id}/availability",
     response_model=ProductAvailabilityResponse,
 )
-def check_availability(
-    product_id: int, request: Request
+async def check_availability(
+    product_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ) -> ProductAvailabilityResponse:
     """Checks whether a product exists and has stock available.
     Returns 200 OK even for out-of-stock items because the query was resolved.
     Returns 404 only when the product does not exist."""
-    product = get_product_or_404(product_id)
+    product = await get_product_or_404(product_id, db)
 
     if product.quantity > 0:
         return ProductAvailabilityResponse(
@@ -302,3 +339,41 @@ def check_availability(
         message="Product is out of stock",
         item=product,
     )
+
+
+class ReserveRequest(BaseModel):
+    quantity: int
+
+@app.post("/inventory/{product_id}/reserve")
+async def reserve_inventory(product_id: int, req: ReserveRequest, db: AsyncSession = Depends(get_db)):
+    """Reserves inventory securely handling concurrency."""
+    db_product = await get_db_product_or_404(product_id, db)
+    
+    if db_product.quantity < req.quantity:
+        raise HTTPException(status_code=400, detail="Not enough stock")
+        
+    stmt = (
+        update(DBProduct)
+        .where(DBProduct.id == product_id, DBProduct.quantity >= req.quantity)
+        .values(quantity=DBProduct.quantity - req.quantity)
+    )
+    result = await db.execute(stmt)
+    if result.rowcount == 0:
+        raise HTTPException(status_code=400, detail="Concurrent modification or not enough stock")
+        
+    await db.commit()
+    return {"message": "Stock reserved", "reserved": req.quantity}
+
+@app.post("/inventory/{product_id}/release")
+async def release_inventory(product_id: int, req: ReserveRequest, db: AsyncSession = Depends(get_db)):
+    """Releases inventory back."""
+    db_product = await get_db_product_or_404(product_id, db)
+    
+    stmt = (
+        update(DBProduct)
+        .where(DBProduct.id == product_id)
+        .values(quantity=DBProduct.quantity + req.quantity)
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return {"message": "Stock released", "released": req.quantity}

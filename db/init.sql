@@ -17,29 +17,11 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
     id              SERIAL       PRIMARY KEY,
-    first_name      VARCHAR(100) NOT NULL,
-    last_name       VARCHAR(100) NOT NULL,
-    suffix          VARCHAR(20),
-    email           VARCHAR(255) NOT NULL UNIQUE,
-    phone_number    VARCHAR(30),
-    dob             DATE,
-    gender          VARCHAR(20),
-    loyalty_tier    VARCHAR(30)  NOT NULL DEFAULT 'bronze',
-    loyalty_points  INTEGER      NOT NULL DEFAULT 0,
-    is_vip          BOOLEAN      NOT NULL DEFAULT FALSE,
-    language_preference VARCHAR(10) NOT NULL DEFAULT 'es',
-    timezone        VARCHAR(50)  NOT NULL DEFAULT 'America/Mexico_City',
-    last_login_at   TIMESTAMPTZ,
-    shipping_address JSONB       NOT NULL DEFAULT '{}',
-    active          BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    data            JSONB        NOT NULL DEFAULT '{}'
 );
 
--- Index on shipping_address JSONB for fast key-level lookups.
-CREATE INDEX IF NOT EXISTS idx_users_shipping ON users USING GIN (shipping_address);
--- Index for loyalty tier searches.
-CREATE INDEX IF NOT EXISTS idx_users_loyalty ON users (loyalty_tier);
+-- Index on JSONB for fast key-level lookups if needed.
+CREATE INDEX IF NOT EXISTS idx_users_data ON users USING GIN (data);
 
 -- -----------------------------------------------------------------------
 -- 2. PRODUCTS  (25 inventory fields, complex nested JSONB)
@@ -49,36 +31,11 @@ CREATE INDEX IF NOT EXISTS idx_users_loyalty ON users (loyalty_tier);
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS products (
     id                      SERIAL         PRIMARY KEY,
-    name                    VARCHAR(200)   NOT NULL,
-    sku                     VARCHAR(50)    NOT NULL UNIQUE,
-    category                VARCHAR(100)   NOT NULL DEFAULT 'general',
     quantity                INTEGER        NOT NULL DEFAULT 0 CHECK (quantity >= 0),
-    unit_price              NUMERIC(12,2)  NOT NULL CHECK (unit_price >= 0),
-    weight_kg               NUMERIC(8,3),
-    dimensions              JSONB          NOT NULL DEFAULT '{}',
-    is_fragile              BOOLEAN        NOT NULL DEFAULT FALSE,
-    requires_refrigeration  BOOLEAN        NOT NULL DEFAULT FALSE,
-    warehouse_id            VARCHAR(20),
-    supplier_id             VARCHAR(20),
-    discount_applied        NUMERIC(5,2)   NOT NULL DEFAULT 0.00,
-    tax_rate                NUMERIC(5,4)   NOT NULL DEFAULT 0.16,
-    currency                VARCHAR(5)     NOT NULL DEFAULT 'MXN',
-    manufacturer            VARCHAR(150),
-    ean13                   VARCHAR(13),
-    stock_at_ordering       INTEGER        NOT NULL DEFAULT 0,
-    estimated_restock_date  DATE,
-    material                VARCHAR(50),
-    color                   VARCHAR(30),
-    size                    VARCHAR(20),
-    warranty_period_months  INTEGER        NOT NULL DEFAULT 12,
-    is_subscription         BOOLEAN        NOT NULL DEFAULT FALSE,
-    created_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+    data                    JSONB          NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX IF NOT EXISTS idx_products_category ON products (category);
-CREATE INDEX IF NOT EXISTS idx_products_warehouse ON products (warehouse_id);
-CREATE INDEX IF NOT EXISTS idx_products_dimensions ON products USING GIN (dimensions);
+CREATE INDEX IF NOT EXISTS idx_products_data ON products USING GIN (data);
 
 -- -----------------------------------------------------------------------
 -- 3. ORDERS  (10 order fields + foreign keys)
@@ -186,42 +143,10 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user_id  ON notifications (user_id)
 -- -----------------------------------------------------------------------
 -- Users (20 customer fields each, with nested shipping_address)
 -- -----------------------------------------------------------------------
-INSERT INTO users (id, first_name, last_name, suffix, email, phone_number, dob, gender,
-                   loyalty_tier, loyalty_points, is_vip, language_preference, timezone,
-                   last_login_at, shipping_address, active) VALUES
-(1, 'Alice',   'Rodríguez', 'Sra.',  'alice.admin@example.com',
-    '+52-555-0101', '1988-03-15', 'female',
-    'platinum', 15420, TRUE, 'es', 'America/Mexico_City',
-    '2026-05-28T10:30:00Z',
-    '{
-        "street": "Av. Paseo de la Reforma 505, Piso 32",
-        "city": "Ciudad de México",
-        "state": "CDMX",
-        "zip": "06500",
-        "country": "MX"
-    }', TRUE),
-(2, 'Carlos',  'Mendoza',   NULL,    'carlos.cliente@example.com',
-    '+52-33-1234-5678', '1995-07-22', 'male',
-    'gold', 4300, FALSE, 'es', 'America/Guadalajara',
-    '2026-05-29T14:00:00Z',
-    '{
-        "street": "Calle Independencia 456, Col. Centro",
-        "city": "Guadalajara",
-        "state": "Jalisco",
-        "zip": "44100",
-        "country": "MX"
-    }', TRUE),
-(3, 'Inés',    'García',    'Dra.',  'ines.inactiva@example.com',
-    '+52-81-9876-5432', '1979-11-03', 'female',
-    'bronze', 120, FALSE, 'en', 'America/Monterrey',
-    NULL,
-    '{
-        "street": "Blvd. Antonio L. Rodríguez 789",
-        "city": "Monterrey",
-        "state": "Nuevo León",
-        "zip": "64000",
-        "country": "MX"
-    }', FALSE);
+INSERT INTO users (id, data) VALUES
+(1, '{"id": 1, "first_name": "Alice", "last_name": "Rodríguez", "suffix": "Sra.", "email": "alice.admin@example.com", "phone_number": "+52-555-0101", "dob": "1988-03-15", "gender": "female", "loyalty_tier": "platinum", "loyalty_points": 15420, "account_created_at": "2024-01-10T08:00:00Z", "is_vip": true, "language_preference": "es", "timezone": "America/Mexico_City", "last_login_at": "2026-05-28T10:30:00Z", "shipping_address": {"street": "Av. Paseo de la Reforma 505, Piso 32", "city": "Ciudad de México", "state": "CDMX", "zip": "06500", "country": "MX"}, "active": true}'),
+(2, '{"id": 2, "first_name": "Carlos", "last_name": "Mendoza", "suffix": null, "email": "carlos.cliente@example.com", "phone_number": "+52-33-1234-5678", "dob": "1995-07-22", "gender": "male", "loyalty_tier": "gold", "loyalty_points": 4300, "account_created_at": "2025-03-18T12:00:00Z", "is_vip": false, "language_preference": "es", "timezone": "America/Guadalajara", "last_login_at": "2026-05-29T14:00:00Z", "shipping_address": {"street": "Calle Independencia 456, Col. Centro", "city": "Guadalajara", "state": "Jalisco", "zip": "44100", "country": "MX"}, "active": true}'),
+(3, '{"id": 3, "first_name": "Inés", "last_name": "García", "suffix": "Dra.", "email": "ines.inactiva@example.com", "phone_number": "+52-81-9876-5432", "dob": "1979-11-03", "gender": "female", "loyalty_tier": "bronze", "loyalty_points": 120, "account_created_at": "2025-11-01T09:00:00Z", "is_vip": false, "language_preference": "en", "timezone": "America/Monterrey", "last_login_at": null, "shipping_address": {"street": "Blvd. Antonio L. Rodríguez 789", "city": "Monterrey", "state": "Nuevo León", "zip": "64000", "country": "MX"}, "active": false}');
 
 -- Reset the sequence so the next INSERT gets id = 4.
 SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));
@@ -229,33 +154,10 @@ SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));
 -- -----------------------------------------------------------------------
 -- Products (25 inventory fields each, with nested dimensions)
 -- -----------------------------------------------------------------------
-INSERT INTO products (id, name, sku, category, quantity, unit_price, weight_kg,
-                      dimensions, is_fragile, requires_refrigeration,
-                      warehouse_id, supplier_id, discount_applied, tax_rate,
-                      currency, manufacturer, ean13, stock_at_ordering,
-                      estimated_restock_date, material, color, size,
-                      warranty_period_months, is_subscription) VALUES
-(1, 'Teclado Mecánico RGB Pro',   'KB-001', 'electronics', 12, 89.99, 1.250,
-    '{"length": 44.0, "width": 14.5, "height": 3.8}',
-    FALSE, FALSE,
-    'WH-CDMX-01', 'SUP-TECH-42', 0.00, 0.16,
-    'MXN', 'KeyTech Industries S.A. de C.V.', '7501234567890', 12,
-    '2026-07-15', 'aluminum', 'matte_black', 'full_size',
-    24, FALSE),
-(2, 'Mouse Inalámbrico Ergonómico', 'MS-002', 'electronics', 0, 29.99, 0.085,
-    '{"length": 12.4, "width": 6.8, "height": 4.0}',
-    FALSE, FALSE,
-    'WH-GDL-03', 'SUP-PERI-18', 10.00, 0.16,
-    'MXN', 'ErgoPoint Labs', '7509876543210', 0,
-    '2026-06-20', 'recycled_plastic', 'silver', 'standard',
-    12, FALSE),
-(3, 'Docking Station USB-C Premium', 'DK-003', 'electronics', 4, 119.50, 0.340,
-    '{"length": 20.0, "width": 8.5, "height": 2.5}',
-    TRUE, FALSE,
-    'WH-CDMX-01', 'SUP-TECH-42', 5.00, 0.16,
-    'MXN', 'ConnectPro México', '7505551234567', 4,
-    '2026-08-01', 'aluminum', 'space_gray', 'compact',
-    36, FALSE);
+INSERT INTO products (id, quantity, data) VALUES
+(1, 12, '{"product_id": 1, "name": "Teclado Mecánico RGB Pro", "category": "electronics", "quantity": 12, "unit_price": 89.99, "weight_kg": 1.25, "dimensions": {"length": 44.0, "width": 14.5, "height": 3.8}, "is_fragile": false, "requires_refrigeration": false, "warehouse_id": "WH-CDMX-01", "supplier_id": "SUP-TECH-42", "discount_applied": 0.0, "tax_rate": 0.16, "currency": "MXN", "manufacturer": "KeyTech Industries S.A. de C.V.", "ean13": "7501234567890", "stock_at_ordering": 12, "estimated_restock_date": "2026-07-15", "material": "aluminum", "color": "matte_black", "size": "full_size", "warranty_period_months": 24, "is_subscription": false}'),
+(2, 0, '{"product_id": 2, "name": "Mouse Inalámbrico Ergonómico", "category": "electronics", "quantity": 0, "unit_price": 29.99, "weight_kg": 0.085, "dimensions": {"length": 12.4, "width": 6.8, "height": 4.0}, "is_fragile": false, "requires_refrigeration": false, "warehouse_id": "WH-GDL-03", "supplier_id": "SUP-PERI-18", "discount_applied": 10.0, "tax_rate": 0.16, "currency": "MXN", "manufacturer": "ErgoPoint Labs", "ean13": "7509876543210", "stock_at_ordering": 0, "estimated_restock_date": "2026-06-20", "material": "recycled_plastic", "color": "silver", "size": "standard", "warranty_period_months": 12, "is_subscription": false}'),
+(3, 4, '{"product_id": 3, "name": "Docking Station USB-C Premium", "category": "electronics", "quantity": 4, "unit_price": 119.50, "weight_kg": 0.34, "dimensions": {"length": 20.0, "width": 8.5, "height": 2.5}, "is_fragile": true, "requires_refrigeration": false, "warehouse_id": "WH-CDMX-01", "supplier_id": "SUP-TECH-42", "discount_applied": 5.0, "tax_rate": 0.16, "currency": "MXN", "manufacturer": "ConnectPro México", "ean13": "7505551234567", "stock_at_ordering": 4, "estimated_restock_date": "2026-08-01", "material": "aluminum", "color": "space_gray", "size": "compact", "warranty_period_months": 36, "is_subscription": false}');
 
 SELECT setval('products_id_seq', (SELECT MAX(id) FROM products));
 

@@ -7,17 +7,27 @@ Every response is wrapped with the 20 global fields (metadata + security)
 to simulate a production-grade Amazon-like system.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, date
 import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from database import engine, Base, get_db, User
+
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
 
 # ── FastAPI application ────────────────────────────────────────────────
-app = FastAPI(title="user-service")
+app = FastAPI(title="user-service", lifespan=lifespan)
 
 # Instrument the FastAPI application to automatically collect metrics.
 # It tracks HTTP requests, response status codes, and request duration.
@@ -241,12 +251,16 @@ def build_security(request: Request) -> SecurityContext:
     )
 
 
-def get_customer_or_404(customer_id: int) -> Customer:
+async def get_customer_or_404(customer_id: int, db: AsyncSession) -> Customer:
     """Centralizes lookup by ID. Returns 404 if not found."""
-    customer = CUSTOMERS.get(customer_id)
-    if customer is None:
+    result = await db.execute(select(User).filter(User.id == customer_id))
+    db_user = result.scalars().first()
+    if db_user is None:
         raise HTTPException(status_code=404, detail="Customer not found")
-    return customer
+    
+    if hasattr(Customer, "model_validate"):
+        return Customer.model_validate(db_user.data)
+    return Customer.parse_obj(db_user.data)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -259,10 +273,44 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service="user-service")
 
 
+@app.post("/users", response_model=Customer)
+async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) -> Customer:
+    """Creates a new customer."""
+    data_dict = customer.model_dump() if hasattr(customer, "model_dump") else customer.dict()
+    db_user = User(id=customer.id, data=data_dict)
+    db.add(db_user)
+    await db.commit()
+    return customer
+
+
+@app.get("/users", response_model=List[Customer])
+async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
+    """Lists all customers."""
+    result = await db.execute(select(User))
+    users = result.scalars().all()
+    if hasattr(Customer, "model_validate"):
+        return [Customer.model_validate(u.data) for u in users]
+    return [Customer.parse_obj(u.data) for u in users]
+
+
+@app.post("/users/generate")
+async def generate_users(db: AsyncSession = Depends(get_db)):
+    """Generates mock users in the database."""
+    count = 0
+    for cid, customer in CUSTOMERS.items():
+        result = await db.execute(select(User).filter(User.id == cid))
+        if not result.scalars().first():
+            data_dict = customer.model_dump() if hasattr(customer, "model_dump") else customer.dict()
+            db.add(User(id=cid, data=data_dict))
+            count += 1
+    await db.commit()
+    return {"message": f"{count} users generated."}
+
+
 @app.get("/users/{user_id}", response_model=CustomerResponse)
-def get_user(user_id: int, request: Request) -> CustomerResponse:
+async def get_user(user_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> CustomerResponse:
     """Retrieves a specific customer by identifier with full profile and global fields."""
-    customer = get_customer_or_404(user_id)
+    customer = await get_customer_or_404(user_id, db)
     return CustomerResponse(
         metadata=build_metadata(request),
         security=build_security(request),
@@ -271,11 +319,11 @@ def get_user(user_id: int, request: Request) -> CustomerResponse:
 
 
 @app.get("/users/{user_id}/validate", response_model=CustomerValidationResponse)
-def validate_user(user_id: int, request: Request) -> CustomerValidationResponse:
+async def validate_user(user_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> CustomerValidationResponse:
     """Validates whether a customer exists and is active.
     Returns 200 OK even for inactive users because the validation was resolved.
     Returns 404 only when the customer does not exist."""
-    customer = get_customer_or_404(user_id)
+    customer = await get_customer_or_404(user_id, db)
 
     if customer.active:
         return CustomerValidationResponse(

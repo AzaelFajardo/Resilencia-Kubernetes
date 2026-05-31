@@ -1,6 +1,8 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Integer
+from sqlalchemy.dialects.postgresql import JSONB
 
 # Todos los servicios deben consumir la variable DATABASE_URL desde compose.yml
 db_url = os.getenv("DATABASE_URL", "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db")
@@ -19,9 +21,17 @@ AsyncSessionLocal = async_sessionmaker(
 
 Base = declarative_base()
 
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quantity = Column(Integer, nullable=False)
+    data = Column(JSONB, nullable=False)
+
 async def get_db():
     async with AsyncSessionLocal() as session:
         try:
             yield session
         finally:
             await session.close()
+
