@@ -91,6 +91,11 @@ class NotificationDetails(BaseModel):
     link_shortener_key: str
 
 
+class NotificationRequest(BaseModel):
+    order_id: str
+    amount: float
+    user_id: str
+
 # ── Response models ────────────────────────────────────────────────────
 
 class HealthResponse(BaseModel):
@@ -202,8 +207,8 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service="notification-service")
 
 
-@app.get("/notify")
-async def send_notification(request: Request) -> NotificationResponse:
+@app.post("/notify")
+async def send_notification(req: NotificationRequest, request: Request) -> NotificationResponse:
     """Simulates notification delivery with all 10 fields and consumed fields.
 
     Steps:

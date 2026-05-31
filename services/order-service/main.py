@@ -22,13 +22,23 @@ from datetime import datetime, timedelta
 import uuid
 import os
 import asyncio
+from contextlib import asynccontextmanager
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from database import engine, Base, Order, get_db
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
 import httpx
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
 # ── FastAPI application ────────────────────────────────────────────────
-app = FastAPI(title="order-service")
+app = FastAPI(title="order-service", lifespan=lifespan)
 
 # Instrument the FastAPI application to automatically collect metrics.
 # It tracks HTTP requests, response status codes, and request duration.
@@ -109,6 +119,11 @@ class OrderDetails(BaseModel):
 
 
 # ── Response models ────────────────────────────────────────────────────
+
+class OrderRequest(BaseModel):
+    user_id: int
+    product_id: int
+    quantity: int
 
 class HealthResponse(BaseModel):
     """Confirms that the service is up and available."""
@@ -215,14 +230,14 @@ def build_order_details(
     )
 
 
-async def call_service(client: httpx.AsyncClient, url: str, retries: int = 0) -> httpx.Response:
-    """Performs a GET request to a service with optional retries."""
+async def call_service(client: httpx.AsyncClient, method: str, url: str, retries: int = 0, json_data: dict = None) -> httpx.Response:
+    """Performs an HTTP request to a service with optional retries."""
     last_error = None
     attempts = retries + 1 if RETRY_ENABLED else 1
 
     for i in range(attempts):
         try:
-            resp = await client.get(url, timeout=HTTP_TIMEOUT)
+            resp = await client.request(method, url, timeout=HTTP_TIMEOUT, json=json_data)
             return resp
         except Exception as e:
             last_error = e
@@ -242,8 +257,8 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service="order-service")
 
 
-@app.get("/order")
-async def create_order(request: Request) -> OrderResponse:
+@app.post("/orders")
+async def create_order(req: OrderRequest, request: Request, db: AsyncSession = Depends(get_db)) -> OrderResponse:
     """Executes the full order flow orchestrating all downstream services.
 
     Steps:
@@ -270,7 +285,7 @@ async def create_order(request: Request) -> OrderResponse:
         # ── Step 1: Validate the user ──────────────────────────────────
         try:
             user_resp = await call_service(
-                client, f"{USER_SERVICE_URL}/users/1/validate", RETRY_COUNT
+                client, "GET", f"{USER_SERVICE_URL}/users/{req.user_id}/validate", RETRY_COUNT
             )
             user_data = user_resp.json()
             downstream["user"] = user_data
@@ -307,12 +322,12 @@ async def create_order(request: Request) -> OrderResponse:
         # ── Step 2: Check inventory ────────────────────────────────────
         try:
             inv_resp = await call_service(
-                client, f"{INVENTORY_SERVICE_URL}/inventory/1/availability", RETRY_COUNT
+                client, "GET", f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/availability", RETRY_COUNT
             )
             inv_data = inv_resp.json()
             downstream["inventory"] = inv_data
 
-            if not inv_data.get("available"):
+            if not inv_data.get("available") or inv_data.get("item", {}).get("quantity", 0) < req.quantity:
                 return OrderResponse(
                     metadata=metadata,
                     security=security,
@@ -352,26 +367,19 @@ async def create_order(request: Request) -> OrderResponse:
                 downstream=downstream,
             )
 
-        # ── Step 4: Build order details consuming cross-service fields ─
-        order = build_order_details(inv_data, security)
-        order.internal_status = "payment_pending"
-
-        # ── Step 5: Process payment ────────────────────────────────────
+        # ── Step 4: Reserve inventory ──────────────────────────────────
         try:
-            pay_resp = await call_service(
-                client, f"{PAYMENT_SERVICE_URL}/pay", RETRY_COUNT
+            reserve_resp = await call_service(
+                client, "POST", f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/reserve", RETRY_COUNT,
+                {"quantity": req.quantity}
             )
-            pay_data = pay_resp.json()
-            downstream["payment"] = pay_data
-
-            if pay_data.get("status") != "success":
-                order.internal_status = "payment_failed"
+            if reserve_resp.status_code != 200:
                 return OrderResponse(
                     metadata=metadata,
                     security=security,
                     status="error",
-                    message="Payment failed",
-                    order=order,
+                    message="Failed to reserve inventory",
+                    order=build_order_details(inv_data, security),
                     downstream=downstream,
                 )
         except Exception:
@@ -379,22 +387,85 @@ async def create_order(request: Request) -> OrderResponse:
                 metadata=metadata,
                 security=security,
                 status="error",
-                message="Payment service unavailable",
+                message="Inventory service unavailable during reservation",
+                order=build_order_details(inv_data, security),
+                downstream=downstream,
+            )
+
+        # ── Step 5: Build order details consuming cross-service fields ─
+        order = build_order_details(inv_data, security)
+        order.internal_status = "payment_pending"
+
+        # ── Step 6: Process payment ────────────────────────────────────
+        unit_price = inv_data.get("item", {}).get("unit_price", 0)
+        total_amount = unit_price * req.quantity
+
+        payment_failed = False
+        try:
+            pay_resp = await call_service(
+                client, "POST", f"{PAYMENT_SERVICE_URL}/pay", RETRY_COUNT,
+                {"order_id": order.id, "amount": total_amount, "user_id": str(req.user_id)}
+            )
+            pay_data = pay_resp.json()
+            downstream["payment"] = pay_data
+
+            if pay_data.get("status") != "success":
+                payment_failed = True
+        except Exception:
+            payment_failed = True
+            
+        if payment_failed:
+            order.internal_status = "payment_failed"
+            # Compensating transaction: Release inventory
+            try:
+                await call_service(
+                    client, "POST", f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/release", 0,
+                    {"quantity": req.quantity}
+                )
+            except Exception:
+                pass # Log release failure in a real app
+
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message="Payment failed, inventory released",
                 order=order,
                 downstream=downstream,
             )
 
         order.internal_status = "payment_verified"
 
-        # ── Step 6: Send notification ──────────────────────────────────
+        # ── Step 7: Send notification ──────────────────────────────────
         try:
             notif_resp = await call_service(
-                client, f"{NOTIFICATION_SERVICE_URL}/notify", RETRY_COUNT
+                client, "POST", f"{NOTIFICATION_SERVICE_URL}/notify", RETRY_COUNT,
+                {"order_id": order.id, "amount": total_amount, "user_id": str(req.user_id)}
             )
             notif_data = notif_resp.json()
             downstream["notification"] = notif_data
         except Exception:
             order.internal_status = "completed_notification_failed"
+
+        # ── Step 8: Save order to DB ───────────────────────────────────
+        if order.internal_status == "payment_verified":
+            order.internal_status = "completed"
+            
+        try:
+            db_order = Order(
+                id=order.id,
+                user_id=req.user_id,
+                product_id=req.product_id,
+                quantity=req.quantity,
+                status=order.internal_status,
+                data=order.model_dump() if hasattr(order, "model_dump") else order.dict()
+            )
+            db.add(db_order)
+            await db.commit()
+        except Exception:
+            pass # Depending on requirements we might log this or fail
+
+        if order.internal_status == "completed_notification_failed":
             return OrderResponse(
                 metadata=metadata,
                 security=security,
@@ -404,7 +475,6 @@ async def create_order(request: Request) -> OrderResponse:
                 downstream=downstream,
             )
 
-    order.internal_status = "completed"
     return OrderResponse(
         metadata=metadata,
         security=security,

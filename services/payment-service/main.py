@@ -99,6 +99,11 @@ class PaymentDetails(BaseModel):
     installment_count: int
 
 
+class PaymentRequest(BaseModel):
+    order_id: str
+    amount: float
+    user_id: str
+
 # ── Response models ────────────────────────────────────────────────────
 
 class HealthResponse(BaseModel):
@@ -216,8 +221,8 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service="payment-service")
 
 
-@app.get("/pay")
-async def process_payment(request: Request) -> PaymentResponse:
+@app.post("/pay")
+async def process_payment(req: PaymentRequest, request: Request) -> PaymentResponse:
     """Simulates payment processing with fraud checks and failure injection.
 
     Steps:
