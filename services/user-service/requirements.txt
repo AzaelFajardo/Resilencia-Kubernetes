@@ -4,3 +4,5 @@ fastapi
 uvicorn
 
 prometheus-fastapi-instrumentator
+sqlalchemy[asyncio]
+asyncpg

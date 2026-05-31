@@ -6,3 +6,5 @@ uvicorn
 httpx
 
 prometheus-fastapi-instrumentator
+sqlalchemy[asyncio]
+asyncpg

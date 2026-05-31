@@ -108,6 +108,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
       OTEL_EXPORTER_OTLP_ENDPOINT:  http://otel-collector:4317
       USER_SERVICE_URL:              http://user-service:8000
       INVENTORY_SERVICE_URL:         http://inventory-service:8000
