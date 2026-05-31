@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import uuid
+import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import update
@@ -34,6 +35,11 @@ app = FastAPI(title="inventory-service", lifespan=lifespan)
 # It tracks HTTP requests, response status codes, and request duration.
 # The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
 Instrumentator().instrument(app).expose(app)
+
+# Failure-injection variables
+FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
+LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
+TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -118,6 +124,10 @@ class HealthResponse(BaseModel):
     status: str
     service: str
 
+class ChaosConfig(BaseModel):
+    FAILURE_RATE: Optional[float] = None
+    LATENCY_MS: Optional[int] = None
+    TIMEOUT_RATE: Optional[float] = None
 
 class ProductResponse(BaseModel):
     """Full response envelope with global fields and product data."""
@@ -377,3 +387,21 @@ async def release_inventory(product_id: int, req: ReserveRequest, db: AsyncSessi
     await db.execute(stmt)
     await db.commit()
     return {"message": "Stock released", "released": req.quantity}
+
+@app.post("/chaos/config")
+def update_chaos_config(config: ChaosConfig):
+    global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
+    if config.FAILURE_RATE is not None:
+        FAILURE_RATE = config.FAILURE_RATE
+    if config.LATENCY_MS is not None:
+        LATENCY_MS = config.LATENCY_MS
+    if config.TIMEOUT_RATE is not None:
+        TIMEOUT_RATE = config.TIMEOUT_RATE
+    return {
+        "message": "Chaos configuration updated",
+        "config": {
+            "FAILURE_RATE": FAILURE_RATE,
+            "LATENCY_MS": LATENCY_MS,
+            "TIMEOUT_RATE": TIMEOUT_RATE
+        }
+    }

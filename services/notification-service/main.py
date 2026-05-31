@@ -35,7 +35,7 @@ Instrumentator().instrument(app).expose(app)
 # They control simulated errors and added latency.
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
-
+TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
 
 # ═══════════════════════════════════════════════════════════════════════
 # GLOBAL MODELS  –  Metadata & Tracing (10) + Risk & Security (10)
@@ -104,6 +104,11 @@ class NotificationRequest(BaseModel):
 
     class Config:
         extra = "allow"
+
+class ChaosConfig(BaseModel):
+    FAILURE_RATE: Optional[float] = None
+    LATENCY_MS: Optional[int] = None
+    TIMEOUT_RATE: Optional[float] = None
 
 # ── Response models ────────────────────────────────────────────────────
 
@@ -275,3 +280,21 @@ async def send_notification(req: NotificationRequest, request: Request) -> Notif
         notification=notification,
         delivery=delivery,
     )
+
+@app.post("/chaos/config")
+def update_chaos_config(config: ChaosConfig):
+    global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
+    if config.FAILURE_RATE is not None:
+        FAILURE_RATE = config.FAILURE_RATE
+    if config.LATENCY_MS is not None:
+        LATENCY_MS = config.LATENCY_MS
+    if config.TIMEOUT_RATE is not None:
+        TIMEOUT_RATE = config.TIMEOUT_RATE
+    return {
+        "message": "Chaos configuration updated",
+        "config": {
+            "FAILURE_RATE": FAILURE_RATE,
+            "LATENCY_MS": LATENCY_MS,
+            "TIMEOUT_RATE": TIMEOUT_RATE
+        }
+    }

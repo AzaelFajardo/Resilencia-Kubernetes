@@ -45,6 +45,11 @@ app = FastAPI(title="order-service", lifespan=lifespan)
 # The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
 Instrumentator().instrument(app).expose(app)
 
+# Failure-injection variables
+FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
+LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
+TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
+
 # Base URLs for dependent services.
 # They are loaded from Compose or fall back to local defaults.
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
@@ -130,6 +135,10 @@ class HealthResponse(BaseModel):
     status: str
     service: str
 
+class ChaosConfig(BaseModel):
+    FAILURE_RATE: Optional[float] = None
+    LATENCY_MS: Optional[int] = None
+    TIMEOUT_RATE: Optional[float] = None
 
 class OrderResponse(BaseModel):
     """Full order response envelope with global fields and all downstream data."""
@@ -483,3 +492,21 @@ async def create_order(req: OrderRequest, request: Request, db: AsyncSession = D
         order=order,
         downstream=downstream,
     )
+
+@app.post("/chaos/config")
+def update_chaos_config(config: ChaosConfig):
+    global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
+    if config.FAILURE_RATE is not None:
+        FAILURE_RATE = config.FAILURE_RATE
+    if config.LATENCY_MS is not None:
+        LATENCY_MS = config.LATENCY_MS
+    if config.TIMEOUT_RATE is not None:
+        TIMEOUT_RATE = config.TIMEOUT_RATE
+    return {
+        "message": "Chaos configuration updated",
+        "config": {
+            "FAILURE_RATE": FAILURE_RATE,
+            "LATENCY_MS": LATENCY_MS,
+            "TIMEOUT_RATE": TIMEOUT_RATE
+        }
+    }
