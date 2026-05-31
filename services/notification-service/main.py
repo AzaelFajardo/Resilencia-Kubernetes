@@ -18,6 +18,7 @@ import uuid
 import os
 import random
 import asyncio
+import httpx
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -95,6 +96,14 @@ class NotificationRequest(BaseModel):
     order_id: str
     amount: float
     user_id: str
+    customer: Optional[dict] = None
+    preferred_channel: Optional[str] = None
+    first_name: Optional[str] = None
+    language_preference: Optional[str] = None
+    gift_message: Optional[str] = None
+
+    class Config:
+        extra = "allow"
 
 # ── Response models ────────────────────────────────────────────────────
 
@@ -168,7 +177,7 @@ def build_security(request: Request) -> SecurityContext:
     )
 
 
-def simulate_delivery(notification: NotificationDetails) -> dict:
+def simulate_delivery(notification: NotificationDetails, first_name: str = "Alice", language: str = "es", gift_message: Optional[str] = None) -> dict:
     """Simulates the delivery process based on the preferred_channel field.
 
     Consumes fields from other categories:
@@ -186,9 +195,9 @@ def simulate_delivery(notification: NotificationDetails) -> dict:
     return {
         "channel_used": channel,
         "provider": provider_map.get(channel, "unknown"),
-        "personalized_greeting": "Hola Alice",
-        "language_used": "es",
-        "gift_message_included": False,
+        "personalized_greeting": f"Hola {first_name}",
+        "language_used": language,
+        "gift_message_included": bool(gift_message),
         "template_rendered": notification.template_id,
         "tracking_pixel_embedded": True,
         "short_link_generated": f"https://rsil.ink/{notification.link_shortener_key}",
@@ -224,8 +233,28 @@ async def send_notification(req: NotificationRequest, request: Request) -> Notif
 
     metadata = build_metadata(request)
     security = build_security(request)
+
+    customer_data = req.customer or {}
+    
+    if not customer_data and req.first_name is None and req.language_preference is None:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://user-service:8000/users/{req.user_id}", timeout=2.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    customer_data = data.get("customer", {})
+        except Exception as e:
+            print(f"Error fetching user data: {e}")
+
     notification = SIMULATED_NOTIFICATION
-    delivery = simulate_delivery(notification)
+    if req.preferred_channel is not None:
+        notification.preferred_channel = req.preferred_channel
+
+    first_name = req.first_name or customer_data.get("first_name", "Alice")
+    language = req.language_preference or customer_data.get("language_preference", "es")
+    gift_message = req.gift_message
+
+    delivery = simulate_delivery(notification, first_name=first_name, language=language, gift_message=gift_message)
 
     # Simulate a controlled failure based on the environment variable.
     if FAILURE_RATE > 0 and random.random() < FAILURE_RATE:

@@ -15,6 +15,7 @@ import uuid
 import os
 import random
 import asyncio
+import httpx
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -103,6 +104,14 @@ class PaymentRequest(BaseModel):
     order_id: str
     amount: float
     user_id: str
+    customer: Optional[dict] = None
+    security: Optional[dict] = None
+    device_fingerprint: Optional[str] = None
+    vpn_detected: Optional[bool] = None
+    coupon_code: Optional[str] = None
+
+    class Config:
+        extra = "allow"
 
 # ── Response models ────────────────────────────────────────────────────
 
@@ -243,7 +252,36 @@ async def process_payment(req: PaymentRequest, request: Request) -> PaymentRespo
 
     metadata = build_metadata(request)
     security = build_security(request)
+    
+    customer_data = req.customer or {}
+    security_data = req.security or {}
+
+    if not customer_data and not security_data and req.device_fingerprint is None and req.vpn_detected is None:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"http://user-service:8000/users/{req.user_id}", timeout=2.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    customer_data = data.get("customer", {})
+                    security_data = data.get("security", {})
+        except Exception as e:
+            print(f"Error fetching user data: {e}")
+
+    # Overwrite security fields if provided either directly or via the fetched JSON
+    if req.device_fingerprint is not None:
+        security.device_fingerprint = req.device_fingerprint
+    elif security_data.get("device_fingerprint") is not None:
+        security.device_fingerprint = security_data["device_fingerprint"]
+
+    if req.vpn_detected is not None:
+        security.vpn_detected = req.vpn_detected
+    elif security_data.get("vpn_detected") is not None:
+        security.vpn_detected = security_data["vpn_detected"]
+
     payment = SIMULATED_PAYMENT
+    if req.coupon_code is not None:
+        payment.coupon_code = req.coupon_code
+
     fraud_result = run_fraud_check(security, payment)
 
     # Simulate a controlled failure based on the environment variable.
