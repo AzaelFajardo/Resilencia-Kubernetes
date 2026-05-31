@@ -29,6 +29,9 @@ from database import engine, Base, Order, get_db
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
 import httpx
+from enum import Enum
+import time
+from prometheus_client import Gauge
 
 
 @asynccontextmanager
@@ -154,8 +157,67 @@ class OrderResponse(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# HELPERS
+# HELPERS & CIRCUIT BREAKER
 # ═══════════════════════════════════════════════════════════════════════
+
+class CircuitBreakerState(str, Enum):
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
+
+class CircuitBreakerError(Exception):
+    pass
+
+cb_state_gauge = Gauge("circuit_breaker_state", "State of the circuit breaker (0=CLOSED, 1=HALF_OPEN, 2=OPEN)", ["service"])
+
+class AsyncCircuitBreaker:
+    def __init__(self, service_name: str, failure_threshold: int = 3, recovery_timeout: float = 10.0):
+        self.service_name = service_name
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.state = CircuitBreakerState.CLOSED
+        self.failures = 0
+        self.last_failure_time = 0.0
+        self._update_metric()
+
+    def _update_metric(self):
+        val = 0
+        if self.state == CircuitBreakerState.HALF_OPEN:
+            val = 1
+        elif self.state == CircuitBreakerState.OPEN:
+            val = 2
+        cb_state_gauge.labels(service=self.service_name).set(val)
+
+    async def call(self, func, *args, **kwargs):
+        if self.state == CircuitBreakerState.OPEN:
+            if time.time() - self.last_failure_time > self.recovery_timeout:
+                self.state = CircuitBreakerState.HALF_OPEN
+                self._update_metric()
+            else:
+                raise CircuitBreakerError("Circuit is OPEN")
+
+        try:
+            result = await func(*args, **kwargs)
+        except Exception as e:
+            self.failures += 1
+            self.last_failure_time = time.time()
+            if self.failures >= self.failure_threshold:
+                self.state = CircuitBreakerState.OPEN
+            self._update_metric()
+            raise e
+
+        if self.state == CircuitBreakerState.HALF_OPEN:
+            self.state = CircuitBreakerState.CLOSED
+            self.failures = 0
+            self._update_metric()
+        elif self.state == CircuitBreakerState.CLOSED:
+            self.failures = 0
+            self._update_metric()
+
+        return result
+
+payment_cb = AsyncCircuitBreaker(service_name="payment_service", failure_threshold=3, recovery_timeout=15.0)
+
 
 def build_metadata(request: Request) -> RequestMetadata:
     """Generates the 10 metadata/tracing fields from the incoming request."""
@@ -267,6 +329,17 @@ async def call_service(client: httpx.AsyncClient, method: str, url: str, retries
 def health() -> HealthResponse:
     """Health endpoint for basic checks."""
     return HealthResponse(status="ok", service="order-service")
+
+
+@app.get("/circuit-breaker/payment")
+def get_payment_cb_state():
+    """Returns the current state of the payment circuit breaker."""
+    return {
+        "state": payment_cb.state.value,
+        "failures": payment_cb.failures,
+        "failure_threshold": payment_cb.failure_threshold,
+        "recovery_timeout": payment_cb.recovery_timeout
+    }
 
 
 @app.post("/orders")
@@ -414,15 +487,25 @@ async def create_order(req: OrderRequest, request: Request, db: AsyncSession = D
 
         payment_failed = False
         try:
-            pay_resp = await call_service(
-                client, "POST", f"{PAYMENT_SERVICE_URL}/pay", RETRY_COUNT,
-                {"order_id": order.id, "amount": total_amount, "user_id": str(req.user_id)}
-            )
-            pay_data = pay_resp.json()
-            downstream["payment"] = pay_data
+            async def do_payment():
+                resp = await call_service(
+                    client, "POST", f"{PAYMENT_SERVICE_URL}/pay", RETRY_COUNT,
+                    {"order_id": order.id, "amount": total_amount, "user_id": str(req.user_id)}
+                )
+                if resp.status_code >= 500:
+                    raise Exception(f"Payment service returned {resp.status_code}")
+                
+                pay_data = resp.json()
+                if pay_data.get("status") != "success":
+                    raise Exception(f"Payment failed with status: {pay_data.get('status')}")
+                
+                return pay_data
 
-            if pay_data.get("status") != "success":
-                payment_failed = True
+            pay_data = await payment_cb.call(do_payment)
+            downstream["payment"] = pay_data
+        except CircuitBreakerError:
+            payment_failed = True
+            downstream["payment"] = {"error": "circuit_breaker_open"}
         except Exception:
             payment_failed = True
             
