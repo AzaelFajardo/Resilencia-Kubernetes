@@ -1,0 +1,3 @@
+# Data generation dependencies for scripts/generate_data.py
+faker
+psycopg2-binary
