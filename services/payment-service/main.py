@@ -23,6 +23,9 @@ from prometheus_fastapi_instrumentator import Instrumentator
 # ── FastAPI application ────────────────────────────────────────────────
 app = FastAPI(title="payment-service")
 
+from tracing import setup_tracing
+setup_tracing(app, "payment-service")
+
 # Instrument the FastAPI application to automatically collect metrics.
 # It tracks HTTP requests, response status codes, and request duration.
 # The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.

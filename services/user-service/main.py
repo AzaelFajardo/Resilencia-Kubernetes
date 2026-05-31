@@ -30,6 +30,9 @@ async def lifespan(app: FastAPI):
 # ── FastAPI application ────────────────────────────────────────────────
 app = FastAPI(title="user-service", lifespan=lifespan)
 
+from tracing import setup_tracing
+setup_tracing(app, "user-service")
+
 # Instrument the FastAPI application to automatically collect metrics.
 # It tracks HTTP requests, response status codes, and request duration.
 # The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
