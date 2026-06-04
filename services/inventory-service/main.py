@@ -8,9 +8,9 @@ to simulate a production-grade Amazon-like system.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 import asyncio
 import random
@@ -18,7 +18,7 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import update
+from sqlalchemy import desc, func, update
 from database import engine, Base, get_db, Product as DBProduct
 
 # This library automatically collects metrics such as request count, latency, and errors.
@@ -160,6 +160,11 @@ class ProductAvailabilityResponse(BaseModel):
     product_id: int
     message: str
     item: Product
+
+
+class InventoryCountResponse(BaseModel):
+    count: int
+    in_stock_count: int
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -323,6 +328,46 @@ async def generate_inventory(db: AsyncSession = Depends(get_db)):
             count += 1
     await db.commit()
     return {"message": f"{count} products generated."}
+
+
+@app.get("/inventory", response_model=List[Product])
+async def list_inventory(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[Product]:
+    await apply_chaos()
+    result = await db.execute(select(DBProduct).order_by(desc(DBProduct.id)).limit(limit))
+    products = result.scalars().all()
+    return [construct_product_model(product) for product in products]
+
+
+@app.get("/inventory/stock", response_model=List[Product])
+async def list_inventory_with_stock(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[Product]:
+    await apply_chaos()
+    result = await db.execute(
+        select(DBProduct)
+        .where(DBProduct.quantity > 0)
+        .order_by(desc(DBProduct.quantity), desc(DBProduct.id))
+        .limit(limit)
+    )
+    products = result.scalars().all()
+    return [construct_product_model(product) for product in products]
+
+
+@app.get("/inventory/count", response_model=InventoryCountResponse)
+async def count_inventory(db: AsyncSession = Depends(get_db)) -> InventoryCountResponse:
+    await apply_chaos()
+    total = await db.scalar(select(func.count()).select_from(DBProduct))
+    in_stock = await db.scalar(
+        select(func.count()).select_from(DBProduct).where(DBProduct.quantity > 0)
+    )
+    return InventoryCountResponse(
+        count=int(total or 0),
+        in_stock_count=int(in_stock or 0),
+    )
 
 
 @app.get("/inventory/{product_id}", response_model=ProductResponse)

@@ -8,7 +8,7 @@ to simulate a production-grade Amazon-like system.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, date
@@ -18,6 +18,7 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import desc, func
 from database import engine, Base, get_db, User
 
 # This library automatically collects metrics such as request count, latency, and errors.
@@ -158,6 +159,17 @@ class CustomerValidationResponse(BaseModel):
     customer: Customer
 
 
+class CountResponse(BaseModel):
+    count: int
+
+
+class RecentUserSummary(BaseModel):
+    id: int
+    email: str
+    first_name: str
+    active: bool
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SIMULATED IN-MEMORY DATA  –  3 customers with all 20 fields
 # ═══════════════════════════════════════════════════════════════════════
@@ -283,10 +295,14 @@ async def get_customer_or_404(customer_id: int, db: AsyncSession) -> Customer:
     db_user = result.scalars().first()
     if db_user is None:
         raise HTTPException(status_code=404, detail="Customer not found")
-    
+
+    return build_customer_model(db_user.data)
+
+
+def build_customer_model(data: dict) -> Customer:
     if hasattr(Customer, "model_validate"):
-        return Customer.model_validate(db_user.data)
-    return Customer.parse_obj(db_user.data)
+        return Customer.model_validate(data)
+    return Customer.parse_obj(data)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -316,9 +332,33 @@ async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
     await apply_chaos()
     result = await db.execute(select(User))
     users = result.scalars().all()
-    if hasattr(Customer, "model_validate"):
-        return [Customer.model_validate(u.data) for u in users]
-    return [Customer.parse_obj(u.data) for u in users]
+    return [build_customer_model(u.data) for u in users]
+
+
+@app.get("/users/count", response_model=CountResponse)
+async def count_users(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    await apply_chaos()
+    total = await db.scalar(select(func.count()).select_from(User))
+    return CountResponse(count=int(total or 0))
+
+
+@app.get("/users/recent", response_model=List[RecentUserSummary])
+async def recent_users(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[RecentUserSummary]:
+    await apply_chaos()
+    result = await db.execute(select(User).order_by(desc(User.id)).limit(limit))
+    users = result.scalars().all()
+    return [
+        RecentUserSummary(
+            id=user.id,
+            email=str((user.data or {}).get("email", "")),
+            first_name=str((user.data or {}).get("first_name", "")),
+            active=bool((user.data or {}).get("active", False)),
+        )
+        for user in users
+    ]
 
 
 @app.post("/users/generate")

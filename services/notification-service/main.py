@@ -8,9 +8,10 @@ import uuid
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, NotificationRecord, engine, get_db
@@ -112,6 +113,20 @@ class NotificationResponse(BaseModel):
     message: str
     notification: NotificationDetails
     delivery: dict
+
+
+class CountResponse(BaseModel):
+    count: int
+
+
+class NotificationRecordSummary(BaseModel):
+    id: int
+    order_id: int
+    user_id: int
+    status: str
+    preferred_channel: str
+    created_at: Optional[str]
+    sent_at: Optional[str]
 
 
 def build_metadata(request: Request) -> RequestMetadata:
@@ -302,6 +317,64 @@ async def send_notification(
         notification=notification,
         delivery=delivery,
     )
+
+
+def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def serialize_notification_record(record: NotificationRecord) -> NotificationRecordSummary:
+    return NotificationRecordSummary(
+        id=int(record.id),
+        order_id=int(record.order_id),
+        user_id=int(record.user_id),
+        status=record.status,
+        preferred_channel=record.preferred_channel,
+        created_at=serialize_datetime(record.created_at),
+        sent_at=serialize_datetime(record.sent_at),
+    )
+
+
+@app.get("/notifications/count", response_model=CountResponse)
+async def count_notifications(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    await apply_chaos_latency_and_timeout()
+    total = await db.scalar(select(func.count()).select_from(NotificationRecord))
+    return CountResponse(count=int(total or 0))
+
+
+@app.get("/notifications/recent", response_model=list[NotificationRecordSummary])
+async def recent_notifications(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> list[NotificationRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(NotificationRecord)
+        .order_by(desc(NotificationRecord.created_at), desc(NotificationRecord.id))
+        .limit(limit)
+    )
+    records = result.scalars().all()
+    return [serialize_notification_record(record) for record in records]
+
+
+@app.get("/notifications/by-order/{order_id}", response_model=NotificationRecordSummary)
+async def get_notification_by_order(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> NotificationRecordSummary:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(NotificationRecord)
+        .where(NotificationRecord.order_id == order_id)
+        .order_by(desc(NotificationRecord.created_at), desc(NotificationRecord.id))
+        .limit(1)
+    )
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Notification not found for order")
+    return serialize_notification_record(record)
 
 
 @app.post("/chaos/config")

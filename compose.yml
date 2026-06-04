@@ -158,6 +158,22 @@ services:
       timeout: 5s
       retries: 3
 
+  frontend:
+    build:
+      context: ./services/frontend
+      args:
+        VITE_SEED_ENABLED: ${SEED_ENABLED:-true}
+        VITE_SEED_USERS_COUNT: ${SEED_USERS_COUNT:-50000}
+    ports:
+      - "5173:80"
+    depends_on:
+      user-service:         {condition: service_healthy}
+      inventory-service:    {condition: service_healthy}
+      order-service:        {condition: service_healthy}
+      payment-service:      {condition: service_healthy}
+      notification-service: {condition: service_healthy}
+    networks: [app-net]
+
   # -- Observability ----------------------------------------------------
 
   otel-collector:

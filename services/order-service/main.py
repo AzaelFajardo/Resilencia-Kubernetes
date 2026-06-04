@@ -11,10 +11,11 @@ from enum import Enum
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, Order, OrderStatus, engine, get_db
@@ -118,6 +119,23 @@ class OrderResponse(BaseModel):
     message: str
     order: OrderDetails
     downstream: dict
+
+
+class CountResponse(BaseModel):
+    count: int
+
+
+class OrderRecordSummary(BaseModel):
+    id: int
+    user_id: int
+    product_id: int
+    quantity: int
+    total_price: float
+    status: str
+    internal_status: str
+    priority: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
 
 
 class CircuitBreakerState(str, Enum):
@@ -312,6 +330,28 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def serialize_order_record(db_order: Order) -> OrderRecordSummary:
+    status = db_order.status.value if hasattr(db_order.status, "value") else str(db_order.status)
+    return OrderRecordSummary(
+        id=int(db_order.id),
+        user_id=int(db_order.user_id),
+        product_id=int(db_order.product_id),
+        quantity=int(db_order.quantity),
+        total_price=float(db_order.total_price),
+        status=status,
+        internal_status=db_order.internal_status,
+        priority=db_order.priority,
+        created_at=serialize_datetime(db_order.created_at),
+        updated_at=serialize_datetime(db_order.updated_at),
+    )
+
+
 def sync_db_order(
     db_order: Order,
     req: OrderRequest,
@@ -386,6 +426,36 @@ def get_payment_cb_state():
         "failure_threshold": payment_cb.failure_threshold,
         "recovery_timeout": payment_cb.recovery_timeout,
     }
+
+
+@app.get("/orders/count", response_model=CountResponse)
+async def count_orders(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    await apply_chaos_latency_and_timeout()
+    total = await db.scalar(select(func.count()).select_from(Order))
+    return CountResponse(count=int(total or 0))
+
+
+@app.get("/orders/recent", response_model=list[OrderRecordSummary])
+async def recent_orders(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> list[OrderRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(Order).order_by(desc(Order.created_at), desc(Order.id)).limit(limit)
+    )
+    orders = result.scalars().all()
+    return [serialize_order_record(order) for order in orders]
+
+
+@app.get("/orders/{order_id}", response_model=OrderRecordSummary)
+async def get_order(order_id: int, db: AsyncSession = Depends(get_db)) -> OrderRecordSummary:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    db_order = result.scalars().first()
+    if db_order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return serialize_order_record(db_order)
 
 
 @app.post("/orders")

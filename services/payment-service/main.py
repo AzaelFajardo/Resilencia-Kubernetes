@@ -9,9 +9,10 @@ import uuid
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, PaymentRecord, engine, get_db
@@ -126,10 +127,40 @@ class PaymentResponse(BaseModel):
     fraud_check: dict
 
 
+class CountResponse(BaseModel):
+    count: int
+
+
+class PaymentRecordSummary(BaseModel):
+    id: int
+    order_id: int
+    status: str
+    order_total: float
+    method: str
+    created_at: Optional[str]
+
+
 def model_dump_compat(model) -> dict:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def serialize_payment_record(record: PaymentRecord) -> PaymentRecordSummary:
+    return PaymentRecordSummary(
+        id=int(record.id),
+        order_id=int(record.order_id),
+        status=record.status,
+        order_total=float(record.order_total),
+        method=record.method,
+        created_at=serialize_datetime(record.created_at),
+    )
 
 
 def build_metadata(request: Request) -> RequestMetadata:
@@ -299,6 +330,46 @@ async def persist_payment(
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok", service="payment-service")
+
+
+@app.get("/payments/count", response_model=CountResponse)
+async def count_payments(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    await apply_chaos_latency_and_timeout()
+    total = await db.scalar(select(func.count()).select_from(PaymentRecord))
+    return CountResponse(count=int(total or 0))
+
+
+@app.get("/payments/recent", response_model=list[PaymentRecordSummary])
+async def recent_payments(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> list[PaymentRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(PaymentRecord)
+        .order_by(desc(PaymentRecord.created_at), desc(PaymentRecord.id))
+        .limit(limit)
+    )
+    records = result.scalars().all()
+    return [serialize_payment_record(record) for record in records]
+
+
+@app.get("/payments/by-order/{order_id}", response_model=PaymentRecordSummary)
+async def get_payment_by_order(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> PaymentRecordSummary:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(PaymentRecord)
+        .where(PaymentRecord.order_id == order_id)
+        .order_by(desc(PaymentRecord.created_at), desc(PaymentRecord.id))
+        .limit(1)
+    )
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Payment not found for order")
+    return serialize_payment_record(record)
 
 
 @app.post("/pay")

@@ -27,6 +27,7 @@ La fuente de verdad del proyecto es:
 | `inventory-service` | `8002` | Consulta, reserva y libera inventario |
 | `payment-service` | `8003` | Simula y persiste pagos |
 | `notification-service` | `8004` | Simula y persiste notificaciones |
+| `frontend` | `5173` | Panel tecnico React servido con Nginx y reverse proxy interno |
 | `data-seeder` | n/a | Genera y carga datos Faker automaticamente al arrancar |
 | `postgres` | `5432` | Base de datos principal |
 | `prometheus` | `9090` | Scraping de metricas |
@@ -76,6 +77,7 @@ docker compose up --build -d
 
 ## URLs utiles
 
+- UI tecnica: `http://localhost:5173`
 - Swagger:
   - `http://localhost:8000/docs`
   - `http://localhost:8001/docs`
@@ -90,6 +92,48 @@ Credenciales de Grafana:
 
 - usuario: `admin`
 - contrasena: `admin`
+
+## Frontend tecnico
+
+El stack ahora incluye `frontend`, una UI React + Vite + TypeScript servida por Nginx en `http://localhost:5173`.
+
+- No fue necesario agregar CORS a los microservicios.
+- El contenedor `frontend` hace reverse proxy interno a:
+  - `/api/user/* -> http://user-service:8000/*`
+  - `/api/inventory/* -> http://inventory-service:8000/*`
+  - `/api/order/* -> http://order-service:8000/*`
+  - `/api/payment/* -> http://payment-service:8000/*`
+  - `/api/notification/* -> http://notification-service:8000/*`
+- La UI muestra:
+  - estado de `user-service`, `inventory-service`, `order-service`, `payment-service`, `notification-service` y `data-seeder`
+  - conteos de usuarios, productos, ordenes, pagos y notificaciones
+  - tablas de usuarios recientes, ordenes recientes, pagos recientes y notificaciones recientes
+  - simulacion de orden contra `POST /orders`
+  - accesos rapidos a Prometheus, Grafana y Jaeger
+
+## Endpoints read-only para UI
+
+Se agregaron endpoints de lectura para alimentar la UI sin tocar la logica transaccional:
+
+- `user-service`
+  - `GET /users/count`
+  - `GET /users/recent?limit=10`
+- `inventory-service`
+  - `GET /inventory?limit=10`
+  - `GET /inventory/stock?limit=10`
+  - `GET /inventory/count`
+- `order-service`
+  - `GET /orders/recent?limit=10`
+  - `GET /orders/count`
+  - `GET /orders/{order_id}`
+- `payment-service`
+  - `GET /payments/recent?limit=10`
+  - `GET /payments/count`
+  - `GET /payments/by-order/{order_id}`
+- `notification-service`
+  - `GET /notifications/recent?limit=10`
+  - `GET /notifications/count`
+  - `GET /notifications/by-order/{order_id}`
 
 ## Verificacion minima
 
@@ -142,6 +186,32 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
   -ContentType 'application/json' `
   -Body '{"user_id":1,"product_id":2,"quantity":1}'
+```
+
+Validacion del frontend y del reverse proxy:
+
+```powershell
+curl.exe -s http://localhost:5173/api/user/users/count
+curl.exe -s "http://localhost:5173/api/user/users/recent?limit=3"
+curl.exe -s "http://localhost:5173/api/order/orders/recent?limit=3"
+curl.exe -s "http://localhost:5173/api/payment/payments/recent?limit=3"
+curl.exe -s "http://localhost:5173/api/notification/notifications/recent?limit=3"
+```
+
+Validacion puntual de los endpoints nuevos por servicio:
+
+```powershell
+curl.exe -s http://localhost:8001/users/count
+curl.exe -s "http://localhost:8001/users/recent?limit=3"
+curl.exe -s http://localhost:8002/inventory/count
+curl.exe -s "http://localhost:8002/inventory/stock?limit=3"
+curl.exe -s http://localhost:8000/orders/count
+curl.exe -s "http://localhost:8000/orders/recent?limit=3"
+curl.exe -s http://localhost:8000/orders/4
+curl.exe -s http://localhost:8003/payments/count
+curl.exe -s "http://localhost:8003/payments/by-order/4"
+curl.exe -s http://localhost:8004/notifications/count
+curl.exe -s "http://localhost:8004/notifications/by-order/4"
 ```
 
 ## Observabilidad
@@ -259,4 +329,5 @@ Para caos:
 
 - [AUDITORIA_TECNICA.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/AUDITORIA_TECNICA.md)
 - [REPORTE_CORRECCIONES.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/REPORTE_CORRECCIONES.md)
+- [REPORTE_UI.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/REPORTE_UI.md)
 - [usonormal.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/usonormal.md)
