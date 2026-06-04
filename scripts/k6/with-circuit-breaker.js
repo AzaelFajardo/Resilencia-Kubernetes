@@ -1,8 +1,8 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-const ORDER_URL = __ENV.ORDER_URL || 'http://localhost:8000/orders';
-const CHAOS_URL = __ENV.CHAOS_URL || 'http://localhost:8003/chaos/config';
+const ORDER_URL = __ENV.ORDER_URL || 'http://order-service:8000/orders';
+const CHAOS_URL = __ENV.CHAOS_URL || 'http://payment-service:8000/chaos/config';
 
 export const options = {
   vus: 10,
@@ -10,21 +10,21 @@ export const options = {
 };
 
 export function setup() {
-  const payload = JSON.stringify({ failure_rate: 0.8 });
+  const payload = JSON.stringify({ FAILURE_RATE: 0.8 });
   const params = { headers: { 'Content-Type': 'application/json' } };
   http.post(CHAOS_URL, payload, params);
 }
 
 export function teardown() {
-  const payload = JSON.stringify({ failure_rate: 0.0 });
+  const payload = JSON.stringify({ FAILURE_RATE: 0.0 });
   const params = { headers: { 'Content-Type': 'application/json' } };
   http.post(CHAOS_URL, payload, params);
 }
 
 export default function () {
   const payload = JSON.stringify({
-    user_id: "1",
-    product_id: "1",
+    user_id: 1,
+    product_id: 1,
     quantity: 1,
   });
 

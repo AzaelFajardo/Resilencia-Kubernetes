@@ -28,6 +28,20 @@ services:
       timeout: 5s
       retries: 5
 
+  data-seeder:
+    build:
+      context: .
+      dockerfile: services/data-seeder/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+      SEED_ENABLED: ${SEED_ENABLED:-true}
+      SEED_USERS_COUNT: ${SEED_USERS_COUNT:-50000}
+      SEED_PRODUCTS_COUNT: ${SEED_PRODUCTS_COUNT:-0}
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [app-net]
+    restart: "no"
+
   # -- Microservices ----------------------------------------------------
 
   user-service:
@@ -39,8 +53,10 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -57,8 +73,10 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -76,8 +94,10 @@ services:
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
+      USER_SERVICE_URL: http://user-service:8000
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -94,8 +114,11 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
+      USER_SERVICE_URL: http://user-service:8000
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -118,13 +141,22 @@ services:
       RETRY_COUNT:    ${RETRY_COUNT:-3}
       RETRY_DELAY_MS: ${RETRY_DELAY_MS:-100}
       HTTP_TIMEOUT:   ${HTTP_TIMEOUT:-5.0}
+      FAILURE_RATE:   ${FAILURE_RATE:-0.0}
+      LATENCY_MS:     ${LATENCY_MS:-0}
+      TIMEOUT_RATE:   ${TIMEOUT_RATE:-0.0}
     depends_on:
       postgres:             {condition: service_healthy}
+      data-seeder:          {condition: service_completed_successfully}
       user-service:         {condition: service_healthy}
       inventory-service:    {condition: service_healthy}
       payment-service:      {condition: service_healthy}
       notification-service: {condition: service_healthy}
     networks: [app-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # -- Observability ----------------------------------------------------
 
@@ -155,6 +187,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks: [app-net]
 
   jaeger:

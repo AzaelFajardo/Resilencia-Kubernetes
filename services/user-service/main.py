@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, date
+import asyncio
+import random
 import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +44,17 @@ Instrumentator().instrument(app).expose(app)
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
 TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
+
+
+async def apply_chaos():
+    if LATENCY_MS > 0:
+        await asyncio.sleep(LATENCY_MS / 1000.0)
+
+    if TIMEOUT_RATE > 0 and random.random() < TIMEOUT_RATE:
+        await asyncio.sleep(30)
+
+    if FAILURE_RATE > 0 and random.random() < FAILURE_RATE:
+        raise HTTPException(status_code=503, detail="Simulated user-service failure")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -289,6 +302,7 @@ def health() -> HealthResponse:
 @app.post("/users", response_model=Customer)
 async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) -> Customer:
     """Creates a new customer."""
+    await apply_chaos()
     data_dict = customer.model_dump() if hasattr(customer, "model_dump") else customer.dict()
     db_user = User(id=customer.id, data=data_dict)
     db.add(db_user)
@@ -299,6 +313,7 @@ async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) ->
 @app.get("/users", response_model=List[Customer])
 async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
     """Lists all customers."""
+    await apply_chaos()
     result = await db.execute(select(User))
     users = result.scalars().all()
     if hasattr(Customer, "model_validate"):
@@ -309,6 +324,7 @@ async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
 @app.post("/users/generate")
 async def generate_users(db: AsyncSession = Depends(get_db)):
     """Generates mock users in the database."""
+    await apply_chaos()
     count = 0
     for cid, customer in CUSTOMERS.items():
         result = await db.execute(select(User).filter(User.id == cid))
@@ -323,6 +339,7 @@ async def generate_users(db: AsyncSession = Depends(get_db)):
 @app.get("/users/{user_id}", response_model=CustomerResponse)
 async def get_user(user_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> CustomerResponse:
     """Retrieves a specific customer by identifier with full profile and global fields."""
+    await apply_chaos()
     customer = await get_customer_or_404(user_id, db)
     return CustomerResponse(
         metadata=build_metadata(request),
@@ -336,6 +353,7 @@ async def validate_user(user_id: int, request: Request, db: AsyncSession = Depen
     """Validates whether a customer exists and is active.
     Returns 200 OK even for inactive users because the validation was resolved.
     Returns 404 only when the customer does not exist."""
+    await apply_chaos()
     customer = await get_customer_or_404(user_id, db)
 
     if customer.active:
