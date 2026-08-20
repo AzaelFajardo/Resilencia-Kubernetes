@@ -206,6 +206,19 @@ export interface ChaosConfigPayload {
   TIMEOUT_RATE: number;
 }
 
+export interface PrometheusSample {
+  metric: Record<string, string>;
+  value: [number, string];
+}
+
+export interface PrometheusQueryResponse {
+  status: string;
+  data: {
+    resultType: string;
+    result: PrometheusSample[];
+  };
+}
+
 const serviceBases = {
   user: "/api/user",
   inventory: "/api/inventory",
@@ -337,5 +350,20 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       },
+    ),
+
+  generateMockUsers: () =>
+    requestJson<{ message: string }>(pathFor("user", "/users/generate"), {
+      method: "POST",
+    }),
+
+  generateMockProducts: () =>
+    requestJson<{ message: string }>(pathFor("inventory", "/inventory/generate"), {
+      method: "POST",
+    }),
+
+  queryPrometheus: (query: string) =>
+    requestJson<PrometheusQueryResponse>(
+      `/api/prometheus/api/v1/query?query=${encodeURIComponent(query)}`,
     ),
 };

@@ -34,7 +34,7 @@ Orquesta la orden completa y persiste el resultado en la tabla `orders`.
 ## Uso principal
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
+Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
   -ContentType 'application/json' `
   -Body '{"user_id":1,"product_id":1,"quantity":1}'
 ```

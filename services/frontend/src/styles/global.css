@@ -448,6 +448,62 @@ select:focus {
   color: var(--success);
 }
 
+.metrics-panel__toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.metrics-panel__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.metrics-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.mock-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  align-items: center;
+}
+
+.mock-grid__copy p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.mock-grid__copy code {
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.85rem;
+}
+
+.mock-grid__note {
+  font-size: 0.9rem;
+}
+
+.mock-grid__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mock-grid__results {
+  margin-top: 16px;
+}
+
 @media (max-width: 1280px) {
   .metrics-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -471,6 +527,19 @@ select:focus {
     grid-template-columns: 1fr;
   }
 
+  .metrics-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mock-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mock-grid__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
   .hero {
     display: grid;
   }
@@ -491,6 +560,10 @@ select:focus {
   }
 
   .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics-mini-grid {
     grid-template-columns: 1fr;
   }
 

@@ -6,3 +6,10 @@ __pycache__/
 dist/
 *.log
 .DS_Store
+
+# Frontend (React + Vite)
+node_modules/
+services/frontend/dist/
+
+# Datos generados masivamente (se regeneran con scripts/generate_data.py)
+generated_*.sql

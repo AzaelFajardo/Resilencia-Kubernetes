@@ -16,6 +16,7 @@ import {
 } from "../api/client";
 import { DataTable } from "../components/DataTable";
 import { MetricCard } from "../components/MetricCard";
+import { MetricsPanel } from "../components/MetricsPanel";
 import { Panel } from "../components/Panel";
 import { ServiceCard } from "../components/ServiceCard";
 import { StatusBadge } from "../components/StatusBadge";
@@ -58,45 +59,54 @@ interface SectionErrors {
   counts?: string;
 }
 
+const orderServicePort = import.meta.env.VITE_ORDER_SERVICE_PORT ?? "8100";
+const userServicePort = import.meta.env.VITE_USER_SERVICE_PORT ?? "8101";
+const inventoryServicePort = import.meta.env.VITE_INVENTORY_SERVICE_PORT ?? "8102";
+const paymentServicePort = import.meta.env.VITE_PAYMENT_SERVICE_PORT ?? "8103";
+const notificationServicePort = import.meta.env.VITE_NOTIFICATION_SERVICE_PORT ?? "8104";
+const prometheusPort = import.meta.env.VITE_PROMETHEUS_PORT ?? "9091";
+const grafanaPort = import.meta.env.VITE_GRAFANA_PORT ?? "3001";
+const jaegerPort = import.meta.env.VITE_JAEGER_PORT ?? "16687";
+
 const SERVICE_CONFIG = [
   {
     key: "user-service",
     label: "user-service",
-    port: "8001",
+    port: userServicePort,
     proxyHealth: () => api.getUserHealth(),
-    docsHref: "http://localhost:8001/docs",
+    docsHref: `http://localhost:${userServicePort}/docs`,
     description: "Valida usuarios y expone perfiles Faker persistidos.",
   },
   {
     key: "inventory-service",
     label: "inventory-service",
-    port: "8002",
+    port: inventoryServicePort,
     proxyHealth: () => api.getInventoryHealth(),
-    docsHref: "http://localhost:8002/docs",
+    docsHref: `http://localhost:${inventoryServicePort}/docs`,
     description: "Consulta disponibilidad y reserva inventario.",
   },
   {
     key: "order-service",
     label: "order-service",
-    port: "8000",
+    port: orderServicePort,
     proxyHealth: () => api.getOrderHealth(),
-    docsHref: "http://localhost:8000/docs",
+    docsHref: `http://localhost:${orderServicePort}/docs`,
     description: "Orquesta el flujo completo de orden.",
   },
   {
     key: "payment-service",
     label: "payment-service",
-    port: "8003",
+    port: paymentServicePort,
     proxyHealth: () => api.getPaymentHealth(),
-    docsHref: "http://localhost:8003/docs",
+    docsHref: `http://localhost:${paymentServicePort}/docs`,
     description: "Registra pagos y resultados antifraude.",
   },
   {
     key: "notification-service",
     label: "notification-service",
-    port: "8004",
+    port: notificationServicePort,
     proxyHealth: () => api.getNotificationHealth(),
-    docsHref: "http://localhost:8004/docs",
+    docsHref: `http://localhost:${notificationServicePort}/docs`,
     description: "Persiste notificaciones y su canal final.",
   },
 ] as const;
@@ -198,6 +208,10 @@ export function DashboardPage() {
   const [chaosMessage, setChaosMessage] = useState<string | null>(null);
   const [chaosError, setChaosError] = useState<string | null>(null);
   const [chaosSubmitting, setChaosSubmitting] = useState(false);
+
+  const [mockResult, setMockResult] = useState<string[] | null>(null);
+  const [mockError, setMockError] = useState<string | null>(null);
+  const [mockSubmitting, setMockSubmitting] = useState(false);
 
   useEffect(() => {
     void refreshDashboard();
@@ -501,6 +515,42 @@ export function DashboardPage() {
     }
   }
 
+  async function generateMocks() {
+    setMockSubmitting(true);
+    setMockError(null);
+    setMockResult(null);
+
+    const results: string[] = [];
+    const errors: string[] = [];
+
+    const [usersResult, productsResult] = await Promise.allSettled([
+      api.generateMockUsers(),
+      api.generateMockProducts(),
+    ]);
+
+    if (usersResult.status === "fulfilled") {
+      results.push(usersResult.value.message);
+    } else {
+      errors.push(`Usuarios: ${captureError(usersResult.reason)}`);
+    }
+
+    if (productsResult.status === "fulfilled") {
+      results.push(productsResult.value.message);
+    } else {
+      errors.push(`Productos: ${captureError(productsResult.reason)}`);
+    }
+
+    if (results.length > 0) {
+      setMockResult(results);
+    }
+    if (errors.length > 0) {
+      setMockError(errors.join(" | "));
+    }
+
+    setMockSubmitting(false);
+    await refreshDashboard();
+  }
+
   const seederStatus = useMemo(() => {
     if (!seedEnabled) {
       return { label: "Desactivado", tone: "neutral" as const };
@@ -572,7 +622,7 @@ export function DashboardPage() {
           <button className="button button--primary" onClick={() => void refreshDashboard()}>
             {refreshing ? "Actualizando..." : "Refrescar panel"}
           </button>
-          <a className="button button--secondary" href="http://localhost:16686" target="_blank" rel="noreferrer">
+          <a className="button button--secondary" href={`http://localhost:${jaegerPort}`} target="_blank" rel="noreferrer">
             Abrir Jaeger
           </a>
         </div>
@@ -620,6 +670,13 @@ export function DashboardPage() {
             <ServiceCard key={key} {...service} />
           ))}
         </div>
+      </Panel>
+
+      <Panel
+        title="Métricas en vivo"
+        subtitle="Métricas Prometheus del stack, consultadas a través del reverse proxy del panel."
+      >
+        <MetricsPanel />
       </Panel>
 
       <div className="two-column-grid">
@@ -964,18 +1021,56 @@ export function DashboardPage() {
         </Panel>
       </div>
 
+      <Panel
+        title="Datos de prueba (Mocks)"
+        subtitle="El data-seeder carga datos Faker masivos al arrancar. También puedes generar el set base de mocks en demanda."
+      >
+        <div className="mock-grid">
+          <div className="mock-grid__copy">
+            <p>
+              Genera los registros de ejemplo (3 usuarios y 3 productos) directamente en la base
+              de datos para probar el flujo de órdenes sin reiniciar el stack. Los endpoints usados
+              son <code>POST /users/generate</code> y <code>POST /inventory/generate</code>.
+            </p>
+            <p className="mock-grid__note">
+              Para datos masivos, configura <code>SEED_USERS_COUNT</code> y <code>SEED_PRODUCTS_COUNT</code> en
+              el arranque (ver <code>.env.example</code>).
+            </p>
+          </div>
+          <div className="mock-grid__actions">
+            <button className="button button--primary" onClick={() => void generateMocks()}>
+              {mockSubmitting ? "Generando..." : "Generar mocks (usuarios + productos)"}
+            </button>
+            <button
+              className="button button--secondary"
+              onClick={() => void refreshDashboard()}
+            >
+              Refrescar panel
+            </button>
+          </div>
+        </div>
+        {mockResult ? (
+          <div className="mock-grid__results">
+            {mockResult.map((message) => (
+              <p key={message} className="inline-success">{message}</p>
+            ))}
+          </div>
+        ) : null}
+        {mockError ? <p className="inline-error">{mockError}</p> : null}
+      </Panel>
+
       <div className="two-column-grid">
         <Panel title="Observabilidad" subtitle="Accesos directos al stack de métricas y trazas.">
           <div className="link-grid">
-            <a className="link-card" href="http://localhost:9090" target="_blank" rel="noreferrer">
+            <a className="link-card" href={`http://localhost:${prometheusPort}`} target="_blank" rel="noreferrer">
               <strong>Prometheus</strong>
               <span>Métricas y targets del stack.</span>
             </a>
-            <a className="link-card" href="http://localhost:3000" target="_blank" rel="noreferrer">
+            <a className="link-card" href={`http://localhost:${grafanaPort}`} target="_blank" rel="noreferrer">
               <strong>Grafana</strong>
               <span>Dashboards y datasource aprovisionado.</span>
             </a>
-            <a className="link-card" href="http://localhost:16686" target="_blank" rel="noreferrer">
+            <a className="link-card" href={`http://localhost:${jaegerPort}`} target="_blank" rel="noreferrer">
               <strong>Jaeger</strong>
               <span>Trazas distribuidas del flujo de órdenes.</span>
             </a>

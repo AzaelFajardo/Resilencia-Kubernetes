@@ -17,7 +17,7 @@ Consulta y valida usuarios reales guardados en PostgreSQL dentro de `users.data`
 ## Uso principal
 
 ```powershell
-Invoke-RestMethod http://localhost:8001/users/1/validate
+Invoke-RestMethod http://localhost:8101/users/1/validate
 ```
 
 ## Notas

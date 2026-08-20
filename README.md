@@ -20,28 +20,44 @@ La fuente de verdad del proyecto es:
 
 ## Arquitectura real
 
+Los puertos son configurables via `.env` (ver `.env.example`). Valores por defecto:
+
 | Servicio | Puerto local | Rol |
 | --- | --- | --- |
-| `order-service` | `8000` | Orquesta la orden completa |
-| `user-service` | `8001` | Valida usuarios desde PostgreSQL |
-| `inventory-service` | `8002` | Consulta, reserva y libera inventario |
-| `payment-service` | `8003` | Simula y persiste pagos |
-| `notification-service` | `8004` | Simula y persiste notificaciones |
-| `frontend` | `5173` | Panel tecnico React servido con Nginx y reverse proxy interno |
+| `order-service` | `8100` | Orquesta la orden completa |
+| `user-service` | `8101` | Valida usuarios desde PostgreSQL |
+| `inventory-service` | `8102` | Consulta, reserva y libera inventario |
+| `payment-service` | `8103` | Simula y persiste pagos |
+| `notification-service` | `8104` | Simula y persiste notificaciones |
+| `frontend` | `5180` | Panel tecnico React servido con Nginx y reverse proxy interno |
 | `data-seeder` | n/a | Genera y carga datos Faker automaticamente al arrancar |
-| `postgres` | `5432` | Base de datos principal |
-| `prometheus` | `9090` | Scraping de metricas |
-| `grafana` | `3000` | Visualizacion de metricas |
-| `jaeger` | `16686` | Visualizacion de trazas |
+| `postgres` | `5434` | Base de datos principal |
+| `prometheus` | `9091` | Scraping de metricas |
+| `grafana` | `3001` | Visualizacion de metricas |
+| `jaeger` | `16687` | Visualizacion de trazas |
 
 ## Arranque rapido
 
-Desde PowerShell en la raiz del repo:
+Hay un helper multiplataforma en la raiz del repo:
+
+- **Windows (PowerShell):** `.\run.ps1 up`
+- **macOS / Linux:** `./run.sh up`
+
+Comandos disponibles: `up`, `build`, `down`, `reset`, `logs`, `ps`, `status` y `help`.
+
+Equivalente directo con Docker Compose:
 
 ```powershell
 docker compose down -v
 docker compose up --build -d
 docker compose ps
+```
+
+Configuracion opcional:
+
+```powershell
+Copy-Item .env.example .env   # Windows
+cp .env.example .env          # macOS / Linux
 ```
 
 Con la configuracion por defecto, `docker compose up --build -d` tambien ejecuta `data-seeder`:
@@ -77,16 +93,16 @@ docker compose up --build -d
 
 ## URLs utiles
 
-- UI tecnica: `http://localhost:5173`
+- UI tecnica: `http://localhost:5180`
 - Swagger:
-  - `http://localhost:8000/docs`
-  - `http://localhost:8001/docs`
-  - `http://localhost:8002/docs`
-  - `http://localhost:8003/docs`
-  - `http://localhost:8004/docs`
-- Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000`
-- Jaeger: `http://localhost:16686`
+  - `http://localhost:8100/docs`
+  - `http://localhost:8101/docs`
+  - `http://localhost:8102/docs`
+  - `http://localhost:8103/docs`
+  - `http://localhost:8104/docs`
+- Prometheus: `http://localhost:9091`
+- Grafana: `http://localhost:3001`
+- Jaeger: `http://localhost:16687`
 
 Credenciales de Grafana:
 
@@ -95,7 +111,7 @@ Credenciales de Grafana:
 
 ## Frontend tecnico
 
-El stack ahora incluye `frontend`, una UI React + Vite + TypeScript servida por Nginx en `http://localhost:5173`.
+El stack ahora incluye `frontend`, una UI React + Vite + TypeScript servida por Nginx en `http://localhost:5180`.
 
 - No fue necesario agregar CORS a los microservicios.
 - El contenedor `frontend` hace reverse proxy interno a:
@@ -104,11 +120,15 @@ El stack ahora incluye `frontend`, una UI React + Vite + TypeScript servida por 
   - `/api/order/* -> http://order-service:8000/*`
   - `/api/payment/* -> http://payment-service:8000/*`
   - `/api/notification/* -> http://notification-service:8000/*`
+  - `/api/prometheus/* -> http://prometheus:9090/*`
 - La UI muestra:
   - estado de `user-service`, `inventory-service`, `order-service`, `payment-service`, `notification-service` y `data-seeder`
   - conteos de usuarios, productos, ordenes, pagos y notificaciones
+  - **metricas en vivo desde Prometheus** (targets saludables, requests, errores 5xx, tasa de error y latencia media)
   - tablas de usuarios recientes, ordenes recientes, pagos recientes y notificaciones recientes
   - simulacion de orden contra `POST /orders`
+  - generacion de datos mock en demanda (`POST /users/generate` y `POST /inventory/generate`)
+  - controles de chaos engineering (`FAILURE_RATE`, `LATENCY_MS`, `TIMEOUT_RATE`)
   - accesos rapidos a Prometheus, Grafana y Jaeger
 
 ## Endpoints read-only para UI
@@ -147,23 +167,23 @@ docker compose exec postgres psql -U resilencia -d resilencia_db -c "SELECT COUN
 Usuario Faker cargado automaticamente:
 
 ```powershell
-Invoke-RestMethod http://localhost:8001/users/50000/validate
+Invoke-RestMethod http://localhost:8101/users/50000/validate
 ```
 
 Health:
 
 ```powershell
-Invoke-RestMethod http://localhost:8000/health
-Invoke-RestMethod http://localhost:8001/health
-Invoke-RestMethod http://localhost:8002/health
-Invoke-RestMethod http://localhost:8003/health
-Invoke-RestMethod http://localhost:8004/health
+Invoke-RestMethod http://localhost:8100/health
+Invoke-RestMethod http://localhost:8101/health
+Invoke-RestMethod http://localhost:8102/health
+Invoke-RestMethod http://localhost:8103/health
+Invoke-RestMethod http://localhost:8104/health
 ```
 
 Orden exitosa:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
+Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
   -ContentType 'application/json' `
   -Body '{"user_id":50000,"product_id":1,"quantity":1}'
 ```
@@ -179,11 +199,11 @@ docker compose exec postgres psql -U resilencia -d resilencia_db -c "SELECT id, 
 Pruebas negativas utiles:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
+Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
   -ContentType 'application/json' `
   -Body '{"user_id":3,"product_id":1,"quantity":1}'
 
-Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
+Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
   -ContentType 'application/json' `
   -Body '{"user_id":1,"product_id":2,"quantity":1}'
 ```
@@ -191,27 +211,27 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/orders `
 Validacion del frontend y del reverse proxy:
 
 ```powershell
-curl.exe -s http://localhost:5173/api/user/users/count
-curl.exe -s "http://localhost:5173/api/user/users/recent?limit=3"
-curl.exe -s "http://localhost:5173/api/order/orders/recent?limit=3"
-curl.exe -s "http://localhost:5173/api/payment/payments/recent?limit=3"
-curl.exe -s "http://localhost:5173/api/notification/notifications/recent?limit=3"
+curl.exe -s http://localhost:5180/api/user/users/count
+curl.exe -s "http://localhost:5180/api/user/users/recent?limit=3"
+curl.exe -s "http://localhost:5180/api/order/orders/recent?limit=3"
+curl.exe -s "http://localhost:5180/api/payment/payments/recent?limit=3"
+curl.exe -s "http://localhost:5180/api/notification/notifications/recent?limit=3"
 ```
 
 Validacion puntual de los endpoints nuevos por servicio:
 
 ```powershell
-curl.exe -s http://localhost:8001/users/count
-curl.exe -s "http://localhost:8001/users/recent?limit=3"
-curl.exe -s http://localhost:8002/inventory/count
-curl.exe -s "http://localhost:8002/inventory/stock?limit=3"
-curl.exe -s http://localhost:8000/orders/count
-curl.exe -s "http://localhost:8000/orders/recent?limit=3"
-curl.exe -s http://localhost:8000/orders/4
-curl.exe -s http://localhost:8003/payments/count
-curl.exe -s "http://localhost:8003/payments/by-order/4"
-curl.exe -s http://localhost:8004/notifications/count
-curl.exe -s "http://localhost:8004/notifications/by-order/4"
+curl.exe -s http://localhost:8101/users/count
+curl.exe -s "http://localhost:8101/users/recent?limit=3"
+curl.exe -s http://localhost:8102/inventory/count
+curl.exe -s "http://localhost:8102/inventory/stock?limit=3"
+curl.exe -s http://localhost:8100/orders/count
+curl.exe -s "http://localhost:8100/orders/recent?limit=3"
+curl.exe -s http://localhost:8100/orders/4
+curl.exe -s http://localhost:8103/payments/count
+curl.exe -s "http://localhost:8103/payments/by-order/4"
+curl.exe -s http://localhost:8104/notifications/count
+curl.exe -s "http://localhost:8104/notifications/by-order/4"
 ```
 
 ## Observabilidad
@@ -219,11 +239,11 @@ curl.exe -s "http://localhost:8004/notifications/by-order/4"
 Metricas:
 
 ```powershell
-Invoke-WebRequest http://localhost:8000/metrics -UseBasicParsing
-Invoke-WebRequest http://localhost:8001/metrics -UseBasicParsing
-Invoke-WebRequest http://localhost:8002/metrics -UseBasicParsing
-Invoke-WebRequest http://localhost:8003/metrics -UseBasicParsing
-Invoke-WebRequest http://localhost:8004/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:8100/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:8101/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:8102/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:8103/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:8104/metrics -UseBasicParsing
 ```
 
 Prometheus:
@@ -237,7 +257,7 @@ Grafana:
 
 Jaeger:
 
-- Despues de crear ordenes, `http://localhost:16686/api/services` debe listar:
+- Despues de crear ordenes, `http://localhost:16687/api/services` debe listar:
   - `order-service`
   - `user-service`
   - `inventory-service`
@@ -325,9 +345,25 @@ Para caos:
 - `with-retries.js` y `with-circuit-breaker.js` ya usan `FAILURE_RATE` en mayusculas.
 - Los scripts estan pensados para correr dentro de la red Docker, no contra `localhost` desde el contenedor.
 
+## Configuracion de la base de datos
+
+Todos los microservicios y el seeder leen la variable `DATABASE_URL`. Por defecto apuntan al contenedor `postgres` de Compose:
+
+```
+postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+```
+
+Para conectar una base de datos externa compatible con PostgreSQL (Neon, RDS/Aurora, Supabase, etc.), define `DATABASE_URL` en `.env`:
+
+```
+DATABASE_URL=postgresql://usuario:clave@mi-host:5432/mi_db
+```
+
+El esquema (`db/init.sql`) usa tipos especificos de PostgreSQL (JSONB, enums y pgcrypto), por lo que MySQL o SQLite requieren adaptar el schema. Consulta `.env.example` para ver todas las variables disponibles.
+
 ## Documentacion relacionada
 
-- [AUDITORIA_TECNICA.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/AUDITORIA_TECNICA.md)
-- [REPORTE_CORRECCIONES.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/REPORTE_CORRECCIONES.md)
-- [REPORTE_UI.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/REPORTE_UI.md)
-- [usonormal.md](/C:/Users/V100/Desktop/Resilencia-Kubernetes/usonormal.md)
+- `docs/00. setup.md`
+- `docs/01.Arquitectura.md`
+- `docs/services/*.md`
+- `docs/tests/ejemplo.md`

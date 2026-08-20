@@ -17,7 +17,7 @@ Consulta productos, revisa disponibilidad y modifica stock real en PostgreSQL.
 ## Uso principal
 
 ```powershell
-Invoke-RestMethod http://localhost:8002/inventory/1/availability
+Invoke-RestMethod http://localhost:8102/inventory/1/availability
 ```
 
 ## Notas
