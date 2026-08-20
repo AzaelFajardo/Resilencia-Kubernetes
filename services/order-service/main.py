@@ -1,37 +1,28 @@
-"""
-order-service  –  Central order orchestrator microservice.
-
-Acts as the main orchestrator for the order flow, coordinating all
-downstream services (user, inventory, payment, notification).
-
-Owns 10 order-specific fields (logistics & metadata) and consumes
-fields from other categories:
-  - items[].weight_kg        → calculates total weight for carrier
-  - items[].dimensions.*     → calculates total dimensions
-  - order.carrier_service_level → decides if special carrier needed
-  - security.fraud_score     → verifies threshold before payment
-  - order.warehouse_dispatch_id → enriched from inventory warehouse_id
-
-Every response includes the 20 global fields (metadata + security).
-"""
-
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime, timedelta
-import uuid
-import os
-import asyncio
 from contextlib import asynccontextmanager
-from fastapi import Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from database import engine, Base, Order, get_db
-# This library automatically collects metrics such as request count, latency, and errors.
-from prometheus_fastapi_instrumentator import Instrumentator
-import httpx
-from enum import Enum
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+import asyncio
+import logging
+import os
+import random
 import time
+import uuid
+from enum import Enum
+from typing import Optional
+
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel
 from prometheus_client import Gauge
+from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database import Base, Order, OrderStatus, engine, get_db
+from tracing import setup_tracing
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -40,52 +31,33 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     yield
 
-# ── FastAPI application ────────────────────────────────────────────────
+
 app = FastAPI(title="order-service", lifespan=lifespan)
-
-from tracing import setup_tracing
 setup_tracing(app, "order-service")
-
-# Instrument the FastAPI application to automatically collect metrics.
-# It tracks HTTP requests, response status codes, and request duration.
-# The metrics are exposed at the "/metrics" endpoint for Prometheus to scrape.
 Instrumentator().instrument(app).expose(app)
 
-# Failure-injection variables
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
 TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
 
-# Base URLs for dependent services.
-# They are loaded from Compose or fall back to local defaults.
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
 INVENTORY_SERVICE_URL = os.getenv("INVENTORY_SERVICE_URL", "http://inventory-service:8000")
 PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8000")
 NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification-service:8000")
 
-# Resilience settings loaded from environment variables.
-# These values control retry behavior and outbound request timeouts.
 RETRY_ENABLED = os.getenv("RETRY_ENABLED", "false").lower() == "true"
 RETRY_COUNT = int(os.getenv("RETRY_COUNT", "3"))
 RETRY_DELAY_MS = int(os.getenv("RETRY_DELAY_MS", "100"))
 HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "5.0"))
-
-# Fraud score threshold — orders above this value are held for review.
 FRAUD_THRESHOLD = int(os.getenv("FRAUD_THRESHOLD", "70"))
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# GLOBAL MODELS  –  Metadata & Tracing (10) + Risk & Security (10)
-# ═══════════════════════════════════════════════════════════════════════
-
 class IpGeolocation(BaseModel):
-    """Nested geolocation derived from the client IP address."""
     city: str
     country: str
 
 
 class SecurityContext(BaseModel):
-    """10 security and risk-assessment fields attached to every request."""
     fraud_score: int
     session_id: str
     device_fingerprint: str
@@ -98,7 +70,6 @@ class SecurityContext(BaseModel):
 
 
 class RequestMetadata(BaseModel):
-    """10 metadata and tracing fields attached to every request."""
     trace_id: str
     request_id: str
     source_system: str
@@ -111,43 +82,37 @@ class RequestMetadata(BaseModel):
     tenant_id: str
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# ORDER-SERVICE MODELS  –  Logistics & Metadata (10 fields)
-# ═══════════════════════════════════════════════════════════════════════
-
 class OrderDetails(BaseModel):
-    """10 order-specific fields as defined in the spec."""
-    id: str
+    id: Optional[int]
     internal_status: str
     priority: str
     is_gift: bool
     gift_message: Optional[str]
     special_instructions: Optional[str]
-    estimated_delivery_at: str
-    warehouse_dispatch_id: str
+    estimated_delivery_at: Optional[str]
+    warehouse_dispatch_id: Optional[str]
     carrier_service_level: str
     return_policy_accepted: bool
 
-
-# ── Response models ────────────────────────────────────────────────────
 
 class OrderRequest(BaseModel):
     user_id: int
     product_id: int
     quantity: int
 
+
 class HealthResponse(BaseModel):
-    """Confirms that the service is up and available."""
     status: str
     service: str
+
 
 class ChaosConfig(BaseModel):
     FAILURE_RATE: Optional[float] = None
     LATENCY_MS: Optional[int] = None
     TIMEOUT_RATE: Optional[float] = None
 
+
 class OrderResponse(BaseModel):
-    """Full order response envelope with global fields and all downstream data."""
     metadata: RequestMetadata
     security: SecurityContext
     status: str
@@ -156,19 +121,45 @@ class OrderResponse(BaseModel):
     downstream: dict
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# HELPERS & CIRCUIT BREAKER
-# ═══════════════════════════════════════════════════════════════════════
+class CountResponse(BaseModel):
+    count: int
+
+
+class OrderRecordSummary(BaseModel):
+    id: int
+    user_id: int
+    product_id: int
+    quantity: int
+    total_price: float
+    status: str
+    internal_status: str
+    priority: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
+
 
 class CircuitBreakerState(str, Enum):
     CLOSED = "CLOSED"
     OPEN = "OPEN"
     HALF_OPEN = "HALF_OPEN"
 
+
 class CircuitBreakerError(Exception):
     pass
 
-cb_state_gauge = Gauge("circuit_breaker_state", "State of the circuit breaker (0=CLOSED, 1=HALF_OPEN, 2=OPEN)", ["service"])
+
+class DownstreamServiceError(Exception):
+    def __init__(self, message: str, payload: Optional[dict] = None):
+        super().__init__(message)
+        self.payload = payload or {}
+
+
+cb_state_gauge = Gauge(
+    "circuit_breaker_state",
+    "State of the circuit breaker (0=CLOSED, 1=HALF_OPEN, 2=OPEN)",
+    ["service"],
+)
+
 
 class AsyncCircuitBreaker:
     def __init__(self, service_name: str, failure_threshold: int = 3, recovery_timeout: float = 10.0):
@@ -181,12 +172,12 @@ class AsyncCircuitBreaker:
         self._update_metric()
 
     def _update_metric(self):
-        val = 0
+        value = 0
         if self.state == CircuitBreakerState.HALF_OPEN:
-            val = 1
+            value = 1
         elif self.state == CircuitBreakerState.OPEN:
-            val = 2
-        cb_state_gauge.labels(service=self.service_name).set(val)
+            value = 2
+        cb_state_gauge.labels(service=self.service_name).set(value)
 
     async def call(self, func, *args, **kwargs):
         if self.state == CircuitBreakerState.OPEN:
@@ -198,13 +189,13 @@ class AsyncCircuitBreaker:
 
         try:
             result = await func(*args, **kwargs)
-        except Exception as e:
+        except Exception as exc:
             self.failures += 1
             self.last_failure_time = time.time()
             if self.failures >= self.failure_threshold:
                 self.state = CircuitBreakerState.OPEN
             self._update_metric()
-            raise e
+            raise exc
 
         if self.state == CircuitBreakerState.HALF_OPEN:
             self.state = CircuitBreakerState.CLOSED
@@ -216,18 +207,22 @@ class AsyncCircuitBreaker:
 
         return result
 
-payment_cb = AsyncCircuitBreaker(service_name="payment_service", failure_threshold=3, recovery_timeout=15.0)
+
+payment_cb = AsyncCircuitBreaker(
+    service_name="payment_service",
+    failure_threshold=3,
+    recovery_timeout=15.0,
+)
 
 
 def build_metadata(request: Request) -> RequestMetadata:
-    """Generates the 10 metadata/tracing fields from the incoming request."""
     return RequestMetadata(
         trace_id=str(uuid.uuid4()),
         request_id=str(uuid.uuid4()),
         source_system="order-service",
         api_version="v1.2.0",
         environment="production",
-        timestamp_utc=datetime.utcnow().isoformat() + "Z",
+        timestamp_utc=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         correlation_token=uuid.uuid4().hex,
         client_ip=request.client.host if request.client else "0.0.0.0",
         user_agent=request.headers.get("user-agent", "unknown"),
@@ -236,12 +231,11 @@ def build_metadata(request: Request) -> RequestMetadata:
 
 
 def build_security(request: Request) -> SecurityContext:
-    """Generates the 10 security/risk fields from the incoming request."""
     return SecurityContext(
         fraud_score=15,
         session_id=str(uuid.uuid4()),
         device_fingerprint=uuid.uuid4().hex,
-        ip_geolocation=IpGeolocation(city="Ciudad de México", country="MX"),
+        ip_geolocation=IpGeolocation(city="Ciudad de Mexico", country="MX"),
         is_authenticated=True,
         auth_method="bearer_token",
         mfa_verified=True,
@@ -250,115 +244,230 @@ def build_security(request: Request) -> SecurityContext:
     )
 
 
-def build_order_details(
-    inv_data: dict,
-    security: SecurityContext,
-) -> OrderDetails:
-    """Builds the 10 order-specific fields, consuming data from other categories.
+def build_placeholder_order(internal_status: str, priority: str = "none") -> OrderDetails:
+    return OrderDetails(
+        id=None,
+        internal_status=internal_status,
+        priority=priority,
+        is_gift=False,
+        gift_message=None,
+        special_instructions=None,
+        estimated_delivery_at=None,
+        warehouse_dispatch_id=None,
+        carrier_service_level="standard",
+        return_policy_accepted=False,
+    )
 
-    Consumes:
-      - items[].weight_kg         → calculates carrier requirements
-      - items[].dimensions.*      → calculates total dimensions
-      - order.carrier_service_level → decides if special carrier needed
-      - security.fraud_score      → verified before proceeding to payment
-      - inventory.warehouse_id    → enriches warehouse_dispatch_id
-    """
-    # Extract item data from inventory response to calculate logistics.
+
+def build_order_details(order_id: Optional[int], inv_data: dict, security: SecurityContext) -> OrderDetails:
     item = inv_data.get("item", {})
-    weight_kg = item.get("weight_kg", 0)
     dimensions = item.get("dimensions", {})
+    weight_kg = item.get("weight_kg", 0)
     warehouse_id = item.get("warehouse_id", "WH-UNKNOWN")
-
-    # Decide carrier service level based on weight and fragility.
-    is_heavy = weight_kg > 5.0
     is_fragile = item.get("is_fragile", False)
-    if is_heavy or is_fragile:
-        carrier = "specialized"
-    else:
-        carrier = "standard"
-
-    # Calculate estimated delivery based on carrier level.
-    if carrier == "specialized":
-        eta = datetime.utcnow() + timedelta(days=5)
-    else:
-        eta = datetime.utcnow() + timedelta(days=3)
-
-    # Calculate total volume from dimensions.
-    total_volume_cm3 = (
-        dimensions.get("length", 0)
-        * dimensions.get("width", 0)
-        * dimensions.get("height", 0)
+    is_heavy = weight_kg > 5.0
+    carrier = "specialized" if is_heavy or is_fragile else "standard"
+    eta = datetime.now(timezone.utc) + timedelta(days=5 if carrier == "specialized" else 3)
+    total_volume = (
+        float(dimensions.get("length", 0))
+        * float(dimensions.get("width", 0))
+        * float(dimensions.get("height", 0))
     )
 
     return OrderDetails(
-        id=f"ORD-{uuid.uuid4().hex[:12].upper()}",
+        id=order_id,
         internal_status="awaiting_validation",
         priority="high" if security.fraud_score < 20 else "normal",
         is_gift=False,
         gift_message=None,
-        special_instructions=f"Total volume: {total_volume_cm3:.1f} cm³. Handle with {'care' if is_fragile else 'standard procedure'}.",
-        estimated_delivery_at=eta.isoformat() + "Z",
+        special_instructions=(
+            f"Total volume: {total_volume:.1f} cm3. "
+            f"Handle with {'care' if is_fragile else 'standard procedure'}."
+        ),
+        estimated_delivery_at=eta.isoformat().replace("+00:00", "Z"),
         warehouse_dispatch_id=str(uuid.uuid5(uuid.NAMESPACE_DNS, warehouse_id)),
         carrier_service_level=carrier,
         return_policy_accepted=True,
     )
 
 
-async def call_service(client: httpx.AsyncClient, method: str, url: str, retries: int = 0, json_data: dict = None) -> httpx.Response:
-    """Performs an HTTP request to a service with optional retries."""
-    last_error = None
-    attempts = retries + 1 if RETRY_ENABLED else 1
+async def apply_chaos_latency_and_timeout():
+    if LATENCY_MS > 0:
+        await asyncio.sleep(LATENCY_MS / 1000.0)
 
-    for i in range(attempts):
+    if TIMEOUT_RATE > 0 and random.random() < TIMEOUT_RATE:
+        await asyncio.sleep(30)
+
+
+def should_simulate_failure() -> bool:
+    return FAILURE_RATE > 0 and random.random() < FAILURE_RATE
+
+
+async def call_service(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    retries: int = 0,
+    json_data: Optional[dict] = None,
+) -> httpx.Response:
+    last_error = None
+    attempts = (max(retries, 0) + 1) if RETRY_ENABLED else 1
+
+    for attempt in range(attempts):
         try:
-            resp = await client.request(method, url, timeout=HTTP_TIMEOUT, json=json_data)
-            return resp
-        except Exception as e:
-            last_error = e
-            if i < attempts - 1:
+            return await client.request(method, url, timeout=HTTP_TIMEOUT, json=json_data)
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts - 1:
                 await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
 
     raise last_error
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════
+def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def serialize_order_record(db_order: Order) -> OrderRecordSummary:
+    status = db_order.status.value if hasattr(db_order.status, "value") else str(db_order.status)
+    return OrderRecordSummary(
+        id=int(db_order.id),
+        user_id=int(db_order.user_id),
+        product_id=int(db_order.product_id),
+        quantity=int(db_order.quantity),
+        total_price=float(db_order.total_price),
+        status=status,
+        internal_status=db_order.internal_status,
+        priority=db_order.priority,
+        created_at=serialize_datetime(db_order.created_at),
+        updated_at=serialize_datetime(db_order.updated_at),
+    )
+
+
+def sync_db_order(
+    db_order: Order,
+    req: OrderRequest,
+    order: OrderDetails,
+    total_price: Decimal,
+    status: OrderStatus,
+):
+    db_order.user_id = req.user_id
+    db_order.product_id = req.product_id
+    db_order.quantity = req.quantity
+    db_order.total_price = total_price
+    db_order.status = status
+    db_order.internal_status = order.internal_status
+    db_order.priority = order.priority
+    db_order.is_gift = order.is_gift
+    db_order.gift_message = order.gift_message
+    db_order.special_instructions = order.special_instructions
+    db_order.estimated_delivery_at = parse_iso_datetime(order.estimated_delivery_at)
+    db_order.warehouse_dispatch_id = (
+        uuid.UUID(order.warehouse_dispatch_id) if order.warehouse_dispatch_id else None
+    )
+    db_order.carrier_service_level = order.carrier_service_level
+    db_order.return_policy_accepted = order.return_policy_accepted
+    db_order.updated_at = datetime.now(timezone.utc)
+
+
+async def release_inventory(
+    client: httpx.AsyncClient,
+    product_id: int,
+    quantity: int,
+) -> Optional[str]:
+    try:
+        response = await call_service(
+            client,
+            "POST",
+            f"{INVENTORY_SERVICE_URL}/inventory/{product_id}/release",
+            0,
+            {"quantity": quantity},
+        )
+        if response.status_code != 200:
+            return f"release returned status {response.status_code}: {response.text}"
+    except Exception as exc:
+        logger.exception("Inventory release failed for product %s", product_id)
+        return str(exc)
+
+    return None
+
+
+async def persist_order_state(
+    db: AsyncSession,
+    db_order: Order,
+    req: OrderRequest,
+    order: OrderDetails,
+    total_price: Decimal,
+    status: OrderStatus,
+):
+    sync_db_order(db_order, req, order, total_price, status)
+    await db.commit()
+    await db.refresh(db_order)
+
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    """Health endpoint for basic checks."""
     return HealthResponse(status="ok", service="order-service")
 
 
 @app.get("/circuit-breaker/payment")
 def get_payment_cb_state():
-    """Returns the current state of the payment circuit breaker."""
     return {
         "state": payment_cb.state.value,
         "failures": payment_cb.failures,
         "failure_threshold": payment_cb.failure_threshold,
-        "recovery_timeout": payment_cb.recovery_timeout
+        "recovery_timeout": payment_cb.recovery_timeout,
     }
 
 
-@app.post("/orders")
-async def create_order(req: OrderRequest, request: Request, db: AsyncSession = Depends(get_db)) -> OrderResponse:
-    """Executes the full order flow orchestrating all downstream services.
+@app.get("/orders/count", response_model=CountResponse)
+async def count_orders(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    await apply_chaos_latency_and_timeout()
+    total = await db.scalar(select(func.count()).select_from(Order))
+    return CountResponse(count=int(total or 0))
 
-    Steps:
-      1. Build global fields (metadata + security with fraud_score).
-      2. Validate the user via user-service (gets 20 customer fields).
-      3. Check inventory via inventory-service (gets 25 item fields).
-      4. Verify fraud_score threshold before proceeding.
-      5. Build order details consuming cross-service fields.
-      6. Process payment via payment-service (gets 15 payment fields).
-      7. Send notification via notification-service (gets 10 notification fields).
-      8. Return full response with all fields from all services.
-    """
+
+@app.get("/orders/recent", response_model=list[OrderRecordSummary])
+async def recent_orders(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> list[OrderRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(Order).order_by(desc(Order.created_at), desc(Order.id)).limit(limit)
+    )
+    orders = result.scalars().all()
+    return [serialize_order_record(order) for order in orders]
+
+
+@app.get("/orders/{order_id}", response_model=OrderRecordSummary)
+async def get_order(order_id: int, db: AsyncSession = Depends(get_db)) -> OrderRecordSummary:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    db_order = result.scalars().first()
+    if db_order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return serialize_order_record(db_order)
+
+
+@app.post("/orders")
+async def create_order(
+    req: OrderRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> OrderResponse:
+    await apply_chaos_latency_and_timeout()
+
     metadata = build_metadata(request)
     security = build_security(request)
-
     downstream = {
         "user": None,
         "inventory": None,
@@ -366,206 +475,391 @@ async def create_order(req: OrderRequest, request: Request, db: AsyncSession = D
         "notification": None,
     }
 
-    async with httpx.AsyncClient() as client:
-        # ── Step 1: Validate the user ──────────────────────────────────
-        try:
-            user_resp = await call_service(
-                client, "GET", f"{USER_SERVICE_URL}/users/{req.user_id}/validate", RETRY_COUNT
-            )
-            user_data = user_resp.json()
-            downstream["user"] = user_data
+    if should_simulate_failure():
+        return OrderResponse(
+            metadata=metadata,
+            security=security,
+            status="error",
+            message="Order service simulated failure",
+            order=build_placeholder_order("service_error"),
+            downstream=downstream,
+        )
 
-            if not user_data.get("valid"):
-                return OrderResponse(
-                    metadata=metadata,
-                    security=security,
-                    status="error",
-                    message="User validation failed — customer is inactive",
-                    order=OrderDetails(
-                        id="N/A", internal_status="rejected", priority="none",
-                        is_gift=False, gift_message=None, special_instructions=None,
-                        estimated_delivery_at="N/A", warehouse_dispatch_id="N/A",
-                        carrier_service_level="none", return_policy_accepted=False,
-                    ),
-                    downstream=downstream,
-                )
-        except Exception:
+    async with httpx.AsyncClient() as client:
+        try:
+            user_response = await call_service(
+                client,
+                "GET",
+                f"{USER_SERVICE_URL}/users/{req.user_id}/validate",
+                RETRY_COUNT,
+            )
+        except Exception as exc:
+            logger.warning("User validation request failed: %s", exc)
             return OrderResponse(
                 metadata=metadata,
                 security=security,
                 status="error",
                 message="User service unavailable",
-                order=OrderDetails(
-                    id="N/A", internal_status="service_error", priority="none",
-                    is_gift=False, gift_message=None, special_instructions=None,
-                    estimated_delivery_at="N/A", warehouse_dispatch_id="N/A",
-                    carrier_service_level="none", return_policy_accepted=False,
-                ),
+                order=build_placeholder_order("service_error"),
                 downstream=downstream,
             )
 
-        # ── Step 2: Check inventory ────────────────────────────────────
-        try:
-            inv_resp = await call_service(
-                client, "GET", f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/availability", RETRY_COUNT
+        if user_response.status_code != 200:
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message=f"User validation failed with status {user_response.status_code}",
+                order=build_placeholder_order("service_error"),
+                downstream=downstream,
             )
-            inv_data = inv_resp.json()
-            downstream["inventory"] = inv_data
 
-            if not inv_data.get("available") or inv_data.get("item", {}).get("quantity", 0) < req.quantity:
-                return OrderResponse(
-                    metadata=metadata,
-                    security=security,
-                    status="error",
-                    message="Product not available — out of stock",
-                    order=OrderDetails(
-                        id="N/A", internal_status="out_of_stock", priority="none",
-                        is_gift=False, gift_message=None, special_instructions=None,
-                        estimated_delivery_at="N/A", warehouse_dispatch_id="N/A",
-                        carrier_service_level="none", return_policy_accepted=False,
-                    ),
-                    downstream=downstream,
-                )
-        except Exception:
+        user_data = user_response.json()
+        downstream["user"] = user_data
+
+        if not user_data.get("valid"):
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message="User validation failed - customer is inactive",
+                order=build_placeholder_order("rejected"),
+                downstream=downstream,
+            )
+
+        try:
+            inventory_response = await call_service(
+                client,
+                "GET",
+                f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/availability",
+                RETRY_COUNT,
+            )
+        except Exception as exc:
+            logger.warning("Inventory availability request failed: %s", exc)
             return OrderResponse(
                 metadata=metadata,
                 security=security,
                 status="error",
                 message="Inventory service unavailable",
-                order=OrderDetails(
-                    id="N/A", internal_status="service_error", priority="none",
-                    is_gift=False, gift_message=None, special_instructions=None,
-                    estimated_delivery_at="N/A", warehouse_dispatch_id="N/A",
-                    carrier_service_level="none", return_policy_accepted=False,
-                ),
+                order=build_placeholder_order("service_error"),
                 downstream=downstream,
             )
 
-        # ── Step 3: Fraud threshold check (consumes security.fraud_score) ─
+        if inventory_response.status_code != 200:
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message=f"Inventory validation failed with status {inventory_response.status_code}",
+                order=build_placeholder_order("service_error"),
+                downstream=downstream,
+            )
+
+        inventory_data = inventory_response.json()
+        downstream["inventory"] = inventory_data
+        item = inventory_data.get("item", {})
+
+        if not inventory_data.get("available") or int(item.get("quantity", 0)) < req.quantity:
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message="Product not available - out of stock",
+                order=build_placeholder_order("out_of_stock"),
+                downstream=downstream,
+            )
+
         if security.fraud_score > FRAUD_THRESHOLD:
             return OrderResponse(
                 metadata=metadata,
                 security=security,
                 status="held",
-                message=f"Order held for manual review — fraud_score {security.fraud_score} exceeds threshold {FRAUD_THRESHOLD}",
-                order=build_order_details(inv_data, security),
+                message=(
+                    f"Order held for manual review - fraud_score {security.fraud_score} "
+                    f"exceeds threshold {FRAUD_THRESHOLD}"
+                ),
+                order=build_order_details(None, inventory_data, security),
                 downstream=downstream,
             )
 
-        # ── Step 4: Reserve inventory ──────────────────────────────────
         try:
-            reserve_resp = await call_service(
-                client, "POST", f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/reserve", RETRY_COUNT,
-                {"quantity": req.quantity}
+            reserve_response = await call_service(
+                client,
+                "POST",
+                f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/reserve",
+                RETRY_COUNT,
+                {"quantity": req.quantity},
             )
-            if reserve_resp.status_code != 200:
-                return OrderResponse(
-                    metadata=metadata,
-                    security=security,
-                    status="error",
-                    message="Failed to reserve inventory",
-                    order=build_order_details(inv_data, security),
-                    downstream=downstream,
-                )
-        except Exception:
+        except Exception as exc:
+            logger.warning("Inventory reserve request failed: %s", exc)
             return OrderResponse(
                 metadata=metadata,
                 security=security,
                 status="error",
                 message="Inventory service unavailable during reservation",
-                order=build_order_details(inv_data, security),
+                order=build_placeholder_order("service_error"),
                 downstream=downstream,
             )
 
-        # ── Step 5: Build order details consuming cross-service fields ─
-        order = build_order_details(inv_data, security)
+        if reserve_response.status_code != 200:
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message=f"Failed to reserve inventory: {reserve_response.text}",
+                order=build_placeholder_order("reservation_failed"),
+                downstream=downstream,
+            )
+
+        unit_price = Decimal(str(item.get("unit_price", 0))).quantize(Decimal("0.01"))
+        total_amount = (unit_price * req.quantity).quantize(Decimal("0.01"))
+        order = build_order_details(None, inventory_data, security)
         order.internal_status = "payment_pending"
 
-        # ── Step 6: Process payment ────────────────────────────────────
-        unit_price = inv_data.get("item", {}).get("unit_price", 0)
-        total_amount = unit_price * req.quantity
+        db_order = Order()
+        sync_db_order(db_order, req, order, total_amount, OrderStatus.confirmed)
 
-        payment_failed = False
+        try:
+            db.add(db_order)
+            await db.commit()
+            await db.refresh(db_order)
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Initial order persistence failed")
+            release_error = await release_inventory(client, req.product_id, req.quantity)
+            message = f"Order persistence failed before payment: {exc}"
+            if release_error:
+                message += f". Inventory release also failed: {release_error}"
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message=message,
+                order=build_placeholder_order("persistence_error"),
+                downstream=downstream,
+            )
+
+        order.id = db_order.id
+        customer_context = user_data.get("customer", {})
+
         try:
             async def do_payment():
-                resp = await call_service(
-                    client, "POST", f"{PAYMENT_SERVICE_URL}/pay", RETRY_COUNT,
-                    {"order_id": order.id, "amount": total_amount, "user_id": str(req.user_id)}
+                response = await call_service(
+                    client,
+                    "POST",
+                    f"{PAYMENT_SERVICE_URL}/pay",
+                    RETRY_COUNT,
+                    {
+                        "order_id": order.id,
+                        "amount": float(total_amount),
+                        "user_id": req.user_id,
+                        "customer": customer_context,
+                        "security": {
+                            "fraud_score": security.fraud_score,
+                            "session_id": security.session_id,
+                            "device_fingerprint": security.device_fingerprint,
+                            "ip_geolocation": {
+                                "city": security.ip_geolocation.city,
+                                "country": security.ip_geolocation.country,
+                            },
+                            "is_authenticated": security.is_authenticated,
+                            "auth_method": security.auth_method,
+                            "mfa_verified": security.mfa_verified,
+                            "vpn_detected": security.vpn_detected,
+                            "request_node_id": security.request_node_id,
+                        },
+                    },
                 )
-                if resp.status_code >= 500:
-                    raise Exception(f"Payment service returned {resp.status_code}")
-                
-                pay_data = resp.json()
-                if pay_data.get("status") != "success":
-                    raise Exception(f"Payment failed with status: {pay_data.get('status')}")
-                
-                return pay_data
+                if response.status_code >= 400:
+                    raise DownstreamServiceError(
+                        f"Payment service returned status {response.status_code}",
+                        {"status": "error", "message": response.text},
+                    )
 
-            pay_data = await payment_cb.call(do_payment)
-            downstream["payment"] = pay_data
+                payload = response.json()
+                if payload.get("status") != "success":
+                    raise DownstreamServiceError(
+                        payload.get("message", "Payment was rejected"),
+                        payload,
+                    )
+
+                return payload
+
+            payment_data = await payment_cb.call(do_payment)
+            downstream["payment"] = payment_data
         except CircuitBreakerError:
-            payment_failed = True
-            downstream["payment"] = {"error": "circuit_breaker_open"}
-        except Exception:
-            payment_failed = True
-            
-        if payment_failed:
+            downstream["payment"] = {"status": "error", "message": "circuit_breaker_open"}
+            payment_error = "Payment circuit breaker is OPEN"
+        except DownstreamServiceError as exc:
+            downstream["payment"] = exc.payload or {"status": "error", "message": str(exc)}
+            payment_error = str(exc)
+        except Exception as exc:
+            downstream["payment"] = {"status": "error", "message": str(exc)}
+            payment_error = str(exc)
+        else:
+            payment_error = None
+
+        if payment_error is not None:
             order.internal_status = "payment_failed"
-            # Compensating transaction: Release inventory
             try:
-                await call_service(
-                    client, "POST", f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/release", 0,
-                    {"quantity": req.quantity}
+                await persist_order_state(
+                    db,
+                    db_order,
+                    req,
+                    order,
+                    total_amount,
+                    OrderStatus.cancelled,
                 )
-            except Exception:
-                pass # Log release failure in a real app
+            except Exception as exc:
+                await db.rollback()
+                logger.exception("Failed to persist cancelled order state")
+                return OrderResponse(
+                    metadata=metadata,
+                    security=security,
+                    status="error",
+                    message=(
+                        f"Payment failed and order state could not be updated: {exc}. "
+                        f"Original payment error: {payment_error}"
+                    ),
+                    order=order,
+                    downstream=downstream,
+                )
+
+            release_error = await release_inventory(client, req.product_id, req.quantity)
+            message = f"Payment failed, inventory released: {payment_error}"
+            if release_error:
+                message += f". Inventory release failed: {release_error}"
 
             return OrderResponse(
                 metadata=metadata,
                 security=security,
                 status="error",
-                message="Payment failed, inventory released",
+                message=message,
                 order=order,
                 downstream=downstream,
             )
 
         order.internal_status = "payment_verified"
-
-        # ── Step 7: Send notification ──────────────────────────────────
         try:
-            notif_resp = await call_service(
-                client, "POST", f"{NOTIFICATION_SERVICE_URL}/notify", RETRY_COUNT,
-                {"order_id": order.id, "amount": total_amount, "user_id": str(req.user_id)}
+            await persist_order_state(
+                db,
+                db_order,
+                req,
+                order,
+                total_amount,
+                OrderStatus.paid,
             )
-            notif_data = notif_resp.json()
-            downstream["notification"] = notif_data
-        except Exception:
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Failed to persist paid order state")
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message=(
+                    f"Payment succeeded but order state update failed: {exc}. "
+                    "Manual review required."
+                ),
+                order=order,
+                downstream=downstream,
+            )
+
+        first_name = customer_context.get("first_name")
+        language_preference = customer_context.get("language_preference")
+        notification_warning = None
+
+        try:
+            notification_response = await call_service(
+                client,
+                "POST",
+                f"{NOTIFICATION_SERVICE_URL}/notify",
+                RETRY_COUNT,
+                {
+                    "order_id": order.id,
+                    "amount": float(total_amount),
+                    "user_id": req.user_id,
+                    "customer": customer_context,
+                    "first_name": first_name,
+                    "language_preference": language_preference,
+                    "gift_message": order.gift_message,
+                },
+            )
+            if notification_response.status_code >= 400:
+                raise DownstreamServiceError(
+                    f"Notification service returned status {notification_response.status_code}",
+                    {"status": "error", "message": notification_response.text},
+                )
+
+            notification_data = notification_response.json()
+            downstream["notification"] = notification_data
+            if notification_data.get("status") != "sent":
+                raise DownstreamServiceError(
+                    notification_data.get("message", "Notification was not delivered"),
+                    notification_data,
+                )
+        except DownstreamServiceError as exc:
+            downstream["notification"] = exc.payload or {"status": "error", "message": str(exc)}
+            notification_warning = str(exc)
+        except Exception as exc:
+            downstream["notification"] = {"status": "error", "message": str(exc)}
+            notification_warning = str(exc)
+
+        if notification_warning is not None:
             order.internal_status = "completed_notification_failed"
+            try:
+                await persist_order_state(
+                    db,
+                    db_order,
+                    req,
+                    order,
+                    total_amount,
+                    OrderStatus.paid,
+                )
+            except Exception as exc:
+                await db.rollback()
+                logger.exception("Failed to persist notification warning state")
+                return OrderResponse(
+                    metadata=metadata,
+                    security=security,
+                    status="error",
+                    message=(
+                        f"Order completed but the warning state could not be persisted: {exc}. "
+                        f"Notification issue: {notification_warning}"
+                    ),
+                    order=order,
+                    downstream=downstream,
+                )
 
-        # ── Step 8: Save order to DB ───────────────────────────────────
-        if order.internal_status == "payment_verified":
-            order.internal_status = "completed"
-            
-        try:
-            db_order = Order(
-                id=order.id,
-                user_id=req.user_id,
-                product_id=req.product_id,
-                quantity=req.quantity,
-                status=order.internal_status,
-                data=order.model_dump() if hasattr(order, "model_dump") else order.dict()
-            )
-            db.add(db_order)
-            await db.commit()
-        except Exception:
-            pass # Depending on requirements we might log this or fail
-
-        if order.internal_status == "completed_notification_failed":
             return OrderResponse(
                 metadata=metadata,
                 security=security,
                 status="warning",
-                message="Order completed but notification failed",
+                message=f"Order completed but notification failed: {notification_warning}",
+                order=order,
+                downstream=downstream,
+            )
+
+        order.internal_status = "completed"
+        try:
+            await persist_order_state(
+                db,
+                db_order,
+                req,
+                order,
+                total_amount,
+                OrderStatus.paid,
+            )
+        except Exception as exc:
+            await db.rollback()
+            logger.exception("Failed to persist completed order state")
+            return OrderResponse(
+                metadata=metadata,
+                security=security,
+                status="error",
+                message=(
+                    f"Order processing finished but the final state could not be persisted: {exc}. "
+                    "Manual review required."
+                ),
                 order=order,
                 downstream=downstream,
             )
@@ -579,20 +873,23 @@ async def create_order(req: OrderRequest, request: Request, db: AsyncSession = D
         downstream=downstream,
     )
 
+
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
     global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
+
     if config.FAILURE_RATE is not None:
         FAILURE_RATE = config.FAILURE_RATE
     if config.LATENCY_MS is not None:
         LATENCY_MS = config.LATENCY_MS
     if config.TIMEOUT_RATE is not None:
         TIMEOUT_RATE = config.TIMEOUT_RATE
+
     return {
         "message": "Chaos configuration updated",
         "config": {
             "FAILURE_RATE": FAILURE_RATE,
             "LATENCY_MS": LATENCY_MS,
-            "TIMEOUT_RATE": TIMEOUT_RATE
-        }
+            "TIMEOUT_RATE": TIMEOUT_RATE,
+        },
     }

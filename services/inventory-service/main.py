@@ -8,15 +8,17 @@ to simulate a production-grade Amazon-like system.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+import asyncio
+import random
 import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import update
+from sqlalchemy import desc, func, update
 from database import engine, Base, get_db, Product as DBProduct
 
 # This library automatically collects metrics such as request count, latency, and errors.
@@ -43,6 +45,17 @@ Instrumentator().instrument(app).expose(app)
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
 TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
+
+
+async def apply_chaos():
+    if LATENCY_MS > 0:
+        await asyncio.sleep(LATENCY_MS / 1000.0)
+
+    if TIMEOUT_RATE > 0 and random.random() < TIMEOUT_RATE:
+        await asyncio.sleep(30)
+
+    if FAILURE_RATE > 0 and random.random() < FAILURE_RATE:
+        raise HTTPException(status_code=503, detail="Simulated inventory-service failure")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -147,6 +160,11 @@ class ProductAvailabilityResponse(BaseModel):
     product_id: int
     message: str
     item: Product
+
+
+class InventoryCountResponse(BaseModel):
+    count: int
+    in_stock_count: int
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -300,6 +318,7 @@ def health() -> HealthResponse:
 @app.post("/inventory/generate")
 async def generate_inventory(db: AsyncSession = Depends(get_db)):
     """Generates mock products in the database."""
+    await apply_chaos()
     count = 0
     for pid, product in PRODUCTS.items():
         result = await db.execute(select(DBProduct).filter(DBProduct.id == pid))
@@ -311,9 +330,50 @@ async def generate_inventory(db: AsyncSession = Depends(get_db)):
     return {"message": f"{count} products generated."}
 
 
+@app.get("/inventory", response_model=List[Product])
+async def list_inventory(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[Product]:
+    await apply_chaos()
+    result = await db.execute(select(DBProduct).order_by(desc(DBProduct.id)).limit(limit))
+    products = result.scalars().all()
+    return [construct_product_model(product) for product in products]
+
+
+@app.get("/inventory/stock", response_model=List[Product])
+async def list_inventory_with_stock(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[Product]:
+    await apply_chaos()
+    result = await db.execute(
+        select(DBProduct)
+        .where(DBProduct.quantity > 0)
+        .order_by(desc(DBProduct.quantity), desc(DBProduct.id))
+        .limit(limit)
+    )
+    products = result.scalars().all()
+    return [construct_product_model(product) for product in products]
+
+
+@app.get("/inventory/count", response_model=InventoryCountResponse)
+async def count_inventory(db: AsyncSession = Depends(get_db)) -> InventoryCountResponse:
+    await apply_chaos()
+    total = await db.scalar(select(func.count()).select_from(DBProduct))
+    in_stock = await db.scalar(
+        select(func.count()).select_from(DBProduct).where(DBProduct.quantity > 0)
+    )
+    return InventoryCountResponse(
+        count=int(total or 0),
+        in_stock_count=int(in_stock or 0),
+    )
+
+
 @app.get("/inventory/{product_id}", response_model=ProductResponse)
 async def get_product(product_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> ProductResponse:
     """Retrieves a product by ID with full details and global fields."""
+    await apply_chaos()
     product = await get_product_or_404(product_id, db)
     return ProductResponse(
         metadata=build_metadata(request),
@@ -332,6 +392,7 @@ async def check_availability(
     """Checks whether a product exists and has stock available.
     Returns 200 OK even for out-of-stock items because the query was resolved.
     Returns 404 only when the product does not exist."""
+    await apply_chaos()
     product = await get_product_or_404(product_id, db)
 
     if product.quantity > 0:
@@ -360,6 +421,7 @@ class ReserveRequest(BaseModel):
 @app.post("/inventory/{product_id}/reserve")
 async def reserve_inventory(product_id: int, req: ReserveRequest, db: AsyncSession = Depends(get_db)):
     """Reserves inventory securely handling concurrency."""
+    await apply_chaos()
     db_product = await get_db_product_or_404(product_id, db)
     
     if db_product.quantity < req.quantity:
@@ -380,6 +442,7 @@ async def reserve_inventory(product_id: int, req: ReserveRequest, db: AsyncSessi
 @app.post("/inventory/{product_id}/release")
 async def release_inventory(product_id: int, req: ReserveRequest, db: AsyncSession = Depends(get_db)):
     """Releases inventory back."""
+    await apply_chaos()
     db_product = await get_db_product_or_404(product_id, db)
     
     stmt = (

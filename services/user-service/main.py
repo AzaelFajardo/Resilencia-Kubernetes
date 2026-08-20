@@ -8,14 +8,17 @@ to simulate a production-grade Amazon-like system.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, date
+import asyncio
+import random
 import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import desc, func
 from database import engine, Base, get_db, User
 
 # This library automatically collects metrics such as request count, latency, and errors.
@@ -42,6 +45,17 @@ Instrumentator().instrument(app).expose(app)
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
 TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
+
+
+async def apply_chaos():
+    if LATENCY_MS > 0:
+        await asyncio.sleep(LATENCY_MS / 1000.0)
+
+    if TIMEOUT_RATE > 0 and random.random() < TIMEOUT_RATE:
+        await asyncio.sleep(30)
+
+    if FAILURE_RATE > 0 and random.random() < FAILURE_RATE:
+        raise HTTPException(status_code=503, detail="Simulated user-service failure")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -143,6 +157,17 @@ class CustomerValidationResponse(BaseModel):
     user_id: int
     message: str
     customer: Customer
+
+
+class CountResponse(BaseModel):
+    count: int
+
+
+class RecentUserSummary(BaseModel):
+    id: int
+    email: str
+    first_name: str
+    active: bool
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -270,10 +295,14 @@ async def get_customer_or_404(customer_id: int, db: AsyncSession) -> Customer:
     db_user = result.scalars().first()
     if db_user is None:
         raise HTTPException(status_code=404, detail="Customer not found")
-    
+
+    return build_customer_model(db_user.data)
+
+
+def build_customer_model(data: dict) -> Customer:
     if hasattr(Customer, "model_validate"):
-        return Customer.model_validate(db_user.data)
-    return Customer.parse_obj(db_user.data)
+        return Customer.model_validate(data)
+    return Customer.parse_obj(data)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -289,6 +318,7 @@ def health() -> HealthResponse:
 @app.post("/users", response_model=Customer)
 async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) -> Customer:
     """Creates a new customer."""
+    await apply_chaos()
     data_dict = customer.model_dump() if hasattr(customer, "model_dump") else customer.dict()
     db_user = User(id=customer.id, data=data_dict)
     db.add(db_user)
@@ -299,16 +329,42 @@ async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) ->
 @app.get("/users", response_model=List[Customer])
 async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
     """Lists all customers."""
+    await apply_chaos()
     result = await db.execute(select(User))
     users = result.scalars().all()
-    if hasattr(Customer, "model_validate"):
-        return [Customer.model_validate(u.data) for u in users]
-    return [Customer.parse_obj(u.data) for u in users]
+    return [build_customer_model(u.data) for u in users]
+
+
+@app.get("/users/count", response_model=CountResponse)
+async def count_users(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    await apply_chaos()
+    total = await db.scalar(select(func.count()).select_from(User))
+    return CountResponse(count=int(total or 0))
+
+
+@app.get("/users/recent", response_model=List[RecentUserSummary])
+async def recent_users(
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[RecentUserSummary]:
+    await apply_chaos()
+    result = await db.execute(select(User).order_by(desc(User.id)).limit(limit))
+    users = result.scalars().all()
+    return [
+        RecentUserSummary(
+            id=user.id,
+            email=str((user.data or {}).get("email", "")),
+            first_name=str((user.data or {}).get("first_name", "")),
+            active=bool((user.data or {}).get("active", False)),
+        )
+        for user in users
+    ]
 
 
 @app.post("/users/generate")
 async def generate_users(db: AsyncSession = Depends(get_db)):
     """Generates mock users in the database."""
+    await apply_chaos()
     count = 0
     for cid, customer in CUSTOMERS.items():
         result = await db.execute(select(User).filter(User.id == cid))
@@ -323,6 +379,7 @@ async def generate_users(db: AsyncSession = Depends(get_db)):
 @app.get("/users/{user_id}", response_model=CustomerResponse)
 async def get_user(user_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> CustomerResponse:
     """Retrieves a specific customer by identifier with full profile and global fields."""
+    await apply_chaos()
     customer = await get_customer_or_404(user_id, db)
     return CustomerResponse(
         metadata=build_metadata(request),
@@ -336,6 +393,7 @@ async def validate_user(user_id: int, request: Request, db: AsyncSession = Depen
     """Validates whether a customer exists and is active.
     Returns 200 OK even for inactive users because the validation was resolved.
     Returns 404 only when the customer does not exist."""
+    await apply_chaos()
     customer = await get_customer_or_404(user_id, db)
 
     if customer.active:

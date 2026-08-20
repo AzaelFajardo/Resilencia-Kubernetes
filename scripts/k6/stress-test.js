@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-const ORDER_URL = __ENV.ORDER_URL || 'http://localhost:8000/orders';
+const ORDER_URL = __ENV.ORDER_URL || 'http://order-service:8000/orders';
 
 export const options = {
   stages: [
@@ -14,8 +14,8 @@ export const options = {
 
 export default function () {
   const payload = JSON.stringify({
-    user_id: "1",
-    product_id: "1",
+    user_id: 1,
+    product_id: 1,
     quantity: 1,
   });
 

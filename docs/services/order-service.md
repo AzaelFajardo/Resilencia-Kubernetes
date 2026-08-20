@@ -1,92 +1,40 @@
-# Microservice: Order Service
+# order-service
 
-## 1. Description
+## Rol
 
-The Order Service is the main microservice in the system. It is responsible for managing order creation and coordinating communication with other services.
+Orquesta la orden completa y persiste el resultado en la tabla `orders`.
 
-## 2. Objective
+## Endpoints reales
 
-Orchestrate the full order flow, integrating payment processing and notification delivery.
+- `GET /health`
+- `GET /circuit-breaker/payment`
+- `POST /orders`
+- `POST /chaos/config`
 
-## 3. Functionality
-
-This service performs:
-
-- Receipt of order requests
-- Communication with the Payment Service
-- Communication with the Notification Service
-- Error handling
-
-## 4. Available Endpoint
-
-`GET /order`
-
-Description:
-
-Creates an order and executes the full system flow.
-
-## 5. Operation Flow
-
-- The request is received
-- A request is sent to the Payment Service
-- If the payment fails, an error is returned
-- If the payment succeeds, a notification is sent
-- The final result is returned
-
-## 6. Possible Responses
-
-Order completed:
+## Body real de `POST /orders`
 
 ```json
 {
-  "status": "success",
-  "message": "Order completed"
+  "user_id": 1,
+  "product_id": 1,
+  "quantity": 1
 }
 ```
 
-Payment failure:
+## Flujo
 
-```json
-{
-  "status": "error",
-  "message": "Payment failed"
-}
+1. Valida usuario
+2. Revisa disponibilidad
+3. Reserva stock
+4. Procesa pago
+5. Envia notificacion
+6. Persiste orden
+7. Responde con `success`, `warning`, `held` o `error`
+
+## Uso principal
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
+  -ContentType 'application/json' `
+  -Body '{"user_id":1,"product_id":1,"quantity":1}'
 ```
-
-Notification failure:
-
-```json
-{
-  "status": "warning",
-  "message": "Order created but notification failed"
-}
-```
-
-## 7. Technologies Used
-
-- Python
-- FastAPI
-- Uvicorn
-- HTTPX
-
-## 8. Execution
-
-Local:
-
-```bash
-python -m uvicorn main:app --reload --port 8003
-```
-
-Docker:
-
-It runs as a container and communicates with other services through the internal network.
-
-## 9. Role in the Architecture
-
-It is the core of the system, responsible for coordinating all processes and ensuring that the business flow runs correctly.
-
-## 10. Error Handling
-
-- Detects failures in the payment service
-- Handles communication errors
-- Allows partial results

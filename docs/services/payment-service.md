@@ -1,78 +1,27 @@
-# Microservice: Payment Service
+# payment-service
 
-## 1. Description
+## Rol
 
-The Payment Service is a microservice responsible for simulating payment processing within the system. This service includes mechanisms to simulate failures and latency, which is essential for resilience testing.
+Simula el cobro y persiste cada intento en la tabla `payments`.
 
-## 2. Objective
+## Endpoints reales
 
-Simulate a critical service that can fail, allowing evaluation of the system behavior when errors occur.
+- `GET /health`
+- `POST /pay`
+- `POST /chaos/config`
 
-## 3. Functionality
-
-This service allows:
-
-- Processing payment requests
-- Simulating delayed responses
-- Generating random failures
-
-## 4. Available Endpoint
-
-`GET /pay`
-
-Description:
-
-Processes a payment request in a simulated way.
-
-Behavior:
-
-- There is a 30% probability of failure
-- Random latency is introduced
-
-Responses:
-
-Success:
+## Body real de `POST /pay`
 
 ```json
 {
-  "status": "success",
-  "message": "Payment processed"
+  "order_id": 3,
+  "amount": 89.99,
+  "user_id": 1
 }
 ```
 
-Error:
+## Notas
 
-```json
-{
-  "status": "error",
-  "message": "Payment failed"
-}
-```
-
-## 5. Technologies Used
-
-- Python
-- FastAPI
-- Uvicorn
-
-## 6. Execution
-
-Local:
-
-```bash
-python -m uvicorn main:app --reload --port 8002
-```
-
-Docker:
-
-It runs in a container with internal port 8000.
-
-## 7. Role in the Architecture
-
-This service is used by the Order Service to validate and process payments before completing an order.
-
-## 8. Resilience Features
-
-- Simulated failures
-- Artificial latency
-- Non-deterministic behavior
+- Persiste pagos exitosos y fallidos
+- Usa `users/{user_id}` como apoyo si falta contexto del cliente
+- `order-service` interpreta `status=success` como pago aceptado

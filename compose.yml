@@ -6,6 +6,8 @@
 #   docker-compose logs -f order-service -> view logs for a single service
 # -----------------------------------------------------------------------
 
+name: resilencia-kubernetes
+
 services:
 
   # -- Database -----------------------------------------------------------
@@ -13,14 +15,14 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER:     resilencia
-      POSTGRES_PASSWORD: resilencia_secret
-      POSTGRES_DB:       resilencia_db
+      POSTGRES_USER:     ${POSTGRES_USER:-resilencia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resilencia_secret}
+      POSTGRES_DB:       ${POSTGRES_DB:-resilencia_db}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5434}:5432"
     networks: [app-net]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U resilencia -d resilencia_db"]
@@ -28,19 +30,35 @@ services:
       timeout: 5s
       retries: 5
 
+  data-seeder:
+    build:
+      context: .
+      dockerfile: services/data-seeder/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
+      SEED_ENABLED: ${SEED_ENABLED:-true}
+      SEED_USERS_COUNT: ${SEED_USERS_COUNT:-50000}
+      SEED_PRODUCTS_COUNT: ${SEED_PRODUCTS_COUNT:-0}
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [app-net]
+    restart: "no"
+
   # -- Microservices ----------------------------------------------------
 
   user-service:
     build: ./services/user-service
     ports:
-      - "8001:8000"
+      - "${USER_SERVICE_PORT:-8101}:8000"
     environment:
-      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -51,14 +69,16 @@ services:
   inventory-service:
     build: ./services/inventory-service
     ports:
-      - "8002:8000"
+      - "${INVENTORY_SERVICE_PORT:-8102}:8000"
     environment:
-      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -69,15 +89,17 @@ services:
   payment-service:
     build: ./services/payment-service
     ports:
-      - "8003:8000"
+      - "${PAYMENT_SERVICE_PORT:-8103}:8000"
     environment:
-      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
+      USER_SERVICE_URL: http://user-service:8000
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -88,14 +110,17 @@ services:
   notification-service:
     build: ./services/notification-service
     ports:
-      - "8004:8000"
+      - "${NOTIFICATION_SERVICE_PORT:-8104}:8000"
     environment:
-      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
+      TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
+      USER_SERVICE_URL: http://user-service:8000
     depends_on:
       postgres: {condition: service_healthy}
+      data-seeder: {condition: service_completed_successfully}
     networks: [app-net]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -106,9 +131,9 @@ services:
   order-service:
     build: ./services/order-service
     ports:
-      - "8000:8000"
+      - "${ORDER_SERVICE_PORT:-8100}:8000"
     environment:
-      DATABASE_URL: postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT:  http://otel-collector:4317
       USER_SERVICE_URL:              http://user-service:8000
       INVENTORY_SERVICE_URL:         http://inventory-service:8000
@@ -118,10 +143,43 @@ services:
       RETRY_COUNT:    ${RETRY_COUNT:-3}
       RETRY_DELAY_MS: ${RETRY_DELAY_MS:-100}
       HTTP_TIMEOUT:   ${HTTP_TIMEOUT:-5.0}
+      FAILURE_RATE:   ${FAILURE_RATE:-0.0}
+      LATENCY_MS:     ${LATENCY_MS:-0}
+      TIMEOUT_RATE:   ${TIMEOUT_RATE:-0.0}
     depends_on:
       postgres:             {condition: service_healthy}
+      data-seeder:          {condition: service_completed_successfully}
       user-service:         {condition: service_healthy}
       inventory-service:    {condition: service_healthy}
+      payment-service:      {condition: service_healthy}
+      notification-service: {condition: service_healthy}
+    networks: [app-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./services/frontend
+      args:
+        VITE_SEED_ENABLED: ${SEED_ENABLED:-true}
+        VITE_SEED_USERS_COUNT: ${SEED_USERS_COUNT:-50000}
+        VITE_ORDER_SERVICE_PORT: ${ORDER_SERVICE_PORT:-8100}
+        VITE_USER_SERVICE_PORT: ${USER_SERVICE_PORT:-8101}
+        VITE_INVENTORY_SERVICE_PORT: ${INVENTORY_SERVICE_PORT:-8102}
+        VITE_PAYMENT_SERVICE_PORT: ${PAYMENT_SERVICE_PORT:-8103}
+        VITE_NOTIFICATION_SERVICE_PORT: ${NOTIFICATION_SERVICE_PORT:-8104}
+        VITE_PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9091}
+        VITE_GRAFANA_PORT: ${GRAFANA_PORT:-3001}
+        VITE_JAEGER_PORT: ${JAEGER_PORT:-16687}
+    ports:
+      - "${FRONTEND_PORT:-5180}:80"
+    depends_on:
+      user-service:         {condition: service_healthy}
+      inventory-service:    {condition: service_healthy}
+      order-service:        {condition: service_healthy}
       payment-service:      {condition: service_healthy}
       notification-service: {condition: service_healthy}
     networks: [app-net]
@@ -144,17 +202,19 @@ services:
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9091}:9090"
     networks: [app-net]
 
   grafana:
     image: grafana/grafana:10.4.2
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks: [app-net]
 
   jaeger:
@@ -162,8 +222,8 @@ services:
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "16686:16686"   # UI
-      - "14250:14250"   # Legacy gRPC
+      - "${JAEGER_PORT:-16687}:16686"   # UI
+      - "${JAEGER_GRPC_PORT:-14251}:14250"   # Legacy gRPC
     networks: [app-net]
 
 # Shared bridge network for local service-to-service communication.

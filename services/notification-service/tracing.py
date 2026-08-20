@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 def setup_tracing(app: FastAPI, service_name: str):
     # Setup Resource and Tracer Provider
@@ -25,3 +26,8 @@ def setup_tracing(app: FastAPI, service_name: str):
 
     # Instrument HTTPX (globally)
     HTTPXClientInstrumentor().instrument()
+
+    try:
+        SQLAlchemyInstrumentor().instrument()
+    except Exception:
+        pass
