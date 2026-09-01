@@ -1,3 +1,8 @@
+# DEV-ONLY credentials.
+# This project is a fully local simulation and is NEVER deployed to the
+# internet. These are development defaults so anyone can clone and run it.
+# If you ever DO deploy this, move these credentials to a Kubernetes Secret
+# or an external secret manager before exposing anything.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,9 +20,13 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
+          env:
+            - name: POSTGRES_USER
+              value: "resilencia"
+            - name: POSTGRES_PASSWORD
+              value: "resilencia_secret"
+            - name: POSTGRES_DB
+              value: "resilencia_db"
           ports:
             - containerPort: 5432
           volumeMounts:
@@ -47,10 +56,9 @@ spec:
         - name: user-service
           image: user-service:latest
           imagePullPolicy: Never
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
           env:
+            - name: DATABASE_URL
+              value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
             - name: FAILURE_RATE
@@ -78,10 +86,9 @@ spec:
         - name: inventory-service
           image: inventory-service:latest
           imagePullPolicy: Never
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
           env:
+            - name: DATABASE_URL
+              value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
             - name: FAILURE_RATE
@@ -114,10 +121,9 @@ spec:
               cpu: "100m"
             limits:
               cpu: "200m"
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
           env:
+            - name: DATABASE_URL
+              value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
             - name: FAILURE_RATE
@@ -147,10 +153,9 @@ spec:
         - name: notification-service
           image: notification-service:latest
           imagePullPolicy: Never
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
           env:
+            - name: DATABASE_URL
+              value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
             - name: FAILURE_RATE
@@ -183,10 +188,9 @@ spec:
               cpu: "100m"
             limits:
               cpu: "200m"
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
           env:
+            - name: DATABASE_URL
+              value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
             - name: USER_SERVICE_URL
@@ -267,9 +271,9 @@ spec:
       containers:
         - name: grafana
           image: grafana/grafana:10.4.2
-          envFrom:
-            - secretRef:
-                name: resilencia-secret
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "admin"
           ports:
             - containerPort: 3000
 ---
