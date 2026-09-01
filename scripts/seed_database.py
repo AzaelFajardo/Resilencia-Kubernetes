@@ -11,10 +11,10 @@ from psycopg.types.json import Jsonb
 import generate_data
 
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db",
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 SEED_ENABLED = os.getenv("SEED_ENABLED", "true").strip().lower() == "true"
 SEED_USERS_COUNT = int(os.getenv("SEED_USERS_COUNT", "50000"))
 SEED_PRODUCTS_COUNT = int(os.getenv("SEED_PRODUCTS_COUNT", "0"))

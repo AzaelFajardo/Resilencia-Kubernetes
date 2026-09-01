@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import declarative_base
 
 
-db_url = os.getenv(
-    "DATABASE_URL",
-    "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db",
-)
+db_url = os.getenv("DATABASE_URL")
+
+if not db_url:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 if db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
