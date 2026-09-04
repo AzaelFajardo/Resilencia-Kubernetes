@@ -37,21 +37,21 @@ case "$COMMAND" in
     show_help
     ;;
   up)
-    docker compose up --build -d
+    docker compose up --build -d --remove-orphans
     echo ""
-    echo "Stack iniciado. Panel: http://localhost:5180"
+    echo "Stack iniciado."
     ;;
   build)
     docker compose build --no-cache
     ;;
   down)
-    docker compose down
+    docker compose down --remove-orphans
     ;;
   reset)
-    docker compose down -v
-    docker compose up --build -d
+    docker compose down -v --remove-orphans
+    docker compose up --build -d --remove-orphans
     echo ""
-    echo "Stack reiniciado desde cero. Panel: http://localhost:5180"
+    echo "Stack reiniciado desde cero."
     ;;
   logs)
     docker compose logs -f
@@ -64,7 +64,6 @@ case "$COMMAND" in
     cat <<'EOF'
 
 URLs utiles:
-  Panel:        http://localhost:5180
   Swagger:      http://localhost:8100/docs .. http://localhost:8104/docs
   Prometheus:   http://localhost:9091
   Grafana:      http://localhost:3001  (admin / admin)

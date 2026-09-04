@@ -29,7 +29,6 @@ Los puertos son configurables via `.env` (ver `.env.example`). Valores por defec
 | `inventory-service` | `8102` | Consulta, reserva y libera inventario |
 | `payment-service` | `8103` | Simula y persiste pagos |
 | `notification-service` | `8104` | Simula y persiste notificaciones |
-| `frontend` | `5180` | Panel tecnico React servido con Nginx y reverse proxy interno |
 | `data-seeder` | n/a | Genera y carga datos Faker automaticamente al arrancar |
 | `postgres` | `5434` | Base de datos principal |
 | `prometheus` | `9091` | Scraping de metricas |
@@ -93,7 +92,6 @@ docker compose up --build -d
 
 ## URLs utiles
 
-- UI tecnica: `http://localhost:5180`
 - Swagger:
   - `http://localhost:8100/docs`
   - `http://localhost:8101/docs`
@@ -109,31 +107,28 @@ Credenciales de Grafana:
 - usuario: `admin`
 - contrasena: `admin`
 
-## Frontend tecnico
+## Control por terminal
 
-El stack ahora incluye `frontend`, una UI React + Vite + TypeScript servida por Nginx en `http://localhost:5180`.
+El proyecto es completamente headless: no hay UI web. El punto de control para el
+equipo es `cli.py` en la raiz del repo (Python estandar, sin dependencias nuevas).
 
-- No fue necesario agregar CORS a los microservicios.
-- El contenedor `frontend` hace reverse proxy interno a:
-  - `/api/user/* -> http://user-service:8000/*`
-  - `/api/inventory/* -> http://inventory-service:8000/*`
-  - `/api/order/* -> http://order-service:8000/*`
-  - `/api/payment/* -> http://payment-service:8000/*`
-  - `/api/notification/* -> http://notification-service:8000/*`
-  - `/api/prometheus/* -> http://prometheus:9090/*`
-- La UI muestra:
-  - estado de `user-service`, `inventory-service`, `order-service`, `payment-service`, `notification-service` y `data-seeder`
-  - conteos de usuarios, productos, ordenes, pagos y notificaciones
-  - **metricas en vivo desde Prometheus** (targets saludables, requests, errores 5xx, tasa de error y latencia media)
-  - tablas de usuarios recientes, ordenes recientes, pagos recientes y notificaciones recientes
-  - simulacion de orden contra `POST /orders`
-  - generacion de datos mock en demanda (`POST /users/generate` y `POST /inventory/generate`)
-  - controles de chaos engineering (`FAILURE_RATE`, `LATENCY_MS`, `TIMEOUT_RATE`)
-  - accesos rapidos a Prometheus, Grafana y Jaeger
+```powershell
+python cli.py status
+python cli.py users generate
+python cli.py inventory generate
+python cli.py order place --user-id 1 --product-id 1 --quantity 1
+python cli.py chaos set order-service --failure-rate 0.2
+python cli.py chaos reset --all
+python cli.py circuit-breaker status
+python cli.py --help
+```
 
-## Endpoints read-only para UI
+Los comandos que alteran el estado compartido del stack (`chaos set`, `chaos reset`)
+piden confirmacion antes de ejecutarse; usa `--yes` para saltarla en scripts.
 
-Se agregaron endpoints de lectura para alimentar la UI sin tocar la logica transaccional:
+## Endpoints read-only
+
+Se agregaron endpoints de lectura para consultar el estado sin tocar la logica transaccional:
 
 - `user-service`
   - `GET /users/count`
@@ -206,16 +201,6 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
 Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
   -ContentType 'application/json' `
   -Body '{"user_id":1,"product_id":2,"quantity":1}'
-```
-
-Validacion del frontend y del reverse proxy:
-
-```powershell
-curl.exe -s http://localhost:5180/api/user/users/count
-curl.exe -s "http://localhost:5180/api/user/users/recent?limit=3"
-curl.exe -s "http://localhost:5180/api/order/orders/recent?limit=3"
-curl.exe -s "http://localhost:5180/api/payment/payments/recent?limit=3"
-curl.exe -s "http://localhost:5180/api/notification/notifications/recent?limit=3"
 ```
 
 Validacion puntual de los endpoints nuevos por servicio:

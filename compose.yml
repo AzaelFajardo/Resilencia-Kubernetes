@@ -146,6 +146,7 @@ services:
       FAILURE_RATE:   ${FAILURE_RATE:-0.0}
       LATENCY_MS:     ${LATENCY_MS:-0}
       TIMEOUT_RATE:   ${TIMEOUT_RATE:-0.0}
+      FRAUD_THRESHOLD: ${FRAUD_THRESHOLD:-70}
     depends_on:
       postgres:             {condition: service_healthy}
       data-seeder:          {condition: service_completed_successfully}
@@ -159,30 +160,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-
-  frontend:
-    build:
-      context: ./services/frontend
-      args:
-        VITE_SEED_ENABLED: ${SEED_ENABLED:-true}
-        VITE_SEED_USERS_COUNT: ${SEED_USERS_COUNT:-50000}
-        VITE_ORDER_SERVICE_PORT: ${ORDER_SERVICE_PORT:-8100}
-        VITE_USER_SERVICE_PORT: ${USER_SERVICE_PORT:-8101}
-        VITE_INVENTORY_SERVICE_PORT: ${INVENTORY_SERVICE_PORT:-8102}
-        VITE_PAYMENT_SERVICE_PORT: ${PAYMENT_SERVICE_PORT:-8103}
-        VITE_NOTIFICATION_SERVICE_PORT: ${NOTIFICATION_SERVICE_PORT:-8104}
-        VITE_PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9091}
-        VITE_GRAFANA_PORT: ${GRAFANA_PORT:-3001}
-        VITE_JAEGER_PORT: ${JAEGER_PORT:-16687}
-    ports:
-      - "${FRONTEND_PORT:-5180}:80"
-    depends_on:
-      user-service:         {condition: service_healthy}
-      inventory-service:    {condition: service_healthy}
-      order-service:        {condition: service_healthy}
-      payment-service:      {condition: service_healthy}
-      notification-service: {condition: service_healthy}
-    networks: [app-net]
 
   # -- Observability ----------------------------------------------------
 
