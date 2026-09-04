@@ -41,6 +41,11 @@ cancels on "no"; a `cli.py order place` completes successfully. All verified.
 **Goal:** capture the "Baseline (sistema sin resiliencia)" scenario the
 proposal asks for first: no retries, no circuit breaker, no autoscaling.
 
+**Status:** complete. Executed once and independently re-verified end to
+end on a second fresh boot (both runs: 0% error rate, all 5 Prometheus
+targets and Jaeger services up, order-service's own `/metrics` histogram
+consistent with the k6 client-side numbers).
+
 **Steps:**
 1. `docker compose up -d --build --remove-orphans` with defaults
    (`RETRY_ENABLED=false`, all `FAILURE_RATE`/`LATENCY_MS`/`TIMEOUT_RATE=0`).
@@ -52,11 +57,18 @@ proposal asks for first: no retries, no circuit breaker, no autoscaling.
 4. Record latency p50/p95/p99, throughput (req/s) and error rate from the k6
    summary and from the Grafana `Resilencia Overview` dashboard.
 
-**Files to add:** `docs/tests/baseline-results.md` (raw k6 output + the four
-numbers above, used as the comparison point for every later phase).
+**Files added:** `docs/tests/baseline-results.md` (k6 output, the four
+metrics above, the Prometheus/Jaeger cross-checks, and the two fixes
+required to get a meaningful run: bumping product 1's seeded stock so the
+test doesn't just measure inventory exhaustion, and adding a business-level
+success check to `scripts/k6/baseline.js` since `order-service` returns
+HTTP 200 for business failures too).
 
-**Exit criteria:** a committed baseline results doc with p50/p95/p99,
-throughput and error rate for the unmodified system.
+**Exit criteria:** met. Results (first run / re-verification run): 258 / 271
+requests, 0% error rate both times, ~8.3–8.7 req/s, p50 97–133ms, p95
+213–276ms, p99 972ms–1.3s. Numbers vary run to run as expected for a load
+test; the shape (near-zero error rate, sub-300ms p95, all services traced)
+is stable and is the comparison point for Phases 3–4.
 
 ## Phase 2 — Load-testing tooling (k6 + JMeter)
 
@@ -64,6 +76,12 @@ throughput and error rate for the unmodified system.
 under `scripts/k6/`) and Apache JMeter (not yet present). Add the missing one
 so both traffic-generation styles (k6's high-volume VUs vs. JMeter's
 concurrent-user simulation) are available for every later scenario.
+
+**Status:** complete. The plan is authored and documented but deliberately
+**not executed** — JMeter itself is not installed in this phase (that
+belongs to whoever runs Phase 3 onward); the XML was only validated for
+well-formedness, not run end to end. Give it a smoke test before trusting
+its numbers.
 
 **Steps:**
 1. Author a JMeter test plan (`.jmx`) hitting `POST /orders` on
@@ -73,10 +91,15 @@ concurrent-user simulation) are available for every later scenario.
    (do not install JMeter yet — this phase only authors the plan; installing
    and running it belongs to whoever executes the experiments).
 
-**Files to add:** `scripts/jmeter/baseline.jmx`, a short usage note in
-`docs/tests/`.
+**Files added:** `scripts/jmeter/baseline.jmx` (10 concurrent users, 10s
+ramp-up, 30s duration, all overridable via `-J<name>=<value>` - mirrors
+k6's `vus: 10, duration: '30s'`; includes the same business-status
+assertion as the k6 fix, since `order-service` returns HTTP 200 for
+business failures too), `docs/tests/jmeter-usage.md` (parameters, the same
+product-1 stock caveat as the k6 baseline, and the exact headless
+invocation with HTML report generation).
 
-**Exit criteria:** a JMeter plan exists and its usage is documented; k6
+**Exit criteria:** met. A JMeter plan exists and its usage is documented; k6
 remains the primary tool for the automated comparisons in Phases 3–4.
 
 ## Phase 3 — Retries scenario
