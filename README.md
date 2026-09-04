@@ -351,4 +351,6 @@ El esquema (`db/init.sql`) usa tipos especificos de PostgreSQL (JSONB, enums y p
 - `docs/00. setup.md`
 - `docs/01.Arquitectura.md`
 - `docs/services/*.md`
-- `docs/tests/ejemplo.md`
+- `docs/tests/`
+- `docs/TOOLING.md` — how `cli.py`, chaos, circuit breaker, k6 and JMeter work
+- `docs/ACTION-PLAN.md` — phased plan and progress

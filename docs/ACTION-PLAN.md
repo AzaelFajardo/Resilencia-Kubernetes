@@ -36,7 +36,7 @@ backends + postgres + data-seeder + otel-collector + prometheus + grafana +
 jaeger; all `/health` return 200; `cli.py status` runs; `cli.py chaos set`
 cancels on "no"; a `cli.py order place` completes successfully. All verified.
 
-## Phase 1 — Baseline scenario (no resilience mechanisms)
+## Phase 1 — Baseline scenario (no resilience mechanisms) (done)
 
 **Goal:** capture the "Baseline (sistema sin resiliencia)" scenario the
 proposal asks for first: no retries, no circuit breaker, no autoscaling.
@@ -70,7 +70,7 @@ requests, 0% error rate both times, ~8.3–8.7 req/s, p50 97–133ms, p95
 test; the shape (near-zero error rate, sub-300ms p95, all services traced)
 is stable and is the comparison point for Phases 3–4.
 
-## Phase 2 — Load-testing tooling (k6 + JMeter)
+## Phase 2 — Load-testing tooling (k6 + JMeter) (done)
 
 **Goal:** the proposal explicitly names two load tools — k6 (already present
 under `scripts/k6/`) and Apache JMeter (not yet present). Add the missing one
@@ -102,11 +102,29 @@ invocation with HTML report generation).
 **Exit criteria:** met. A JMeter plan exists and its usage is documented; k6
 remains the primary tool for the automated comparisons in Phases 3–4.
 
-## Phase 3 — Retries scenario
+## Phase 3 — Retries scenario (done)
 
 **Goal:** measure the proposal's expected trade-off ("retries aumentan
 latencia pero reducen errores") using the retry logic already implemented in
 `order-service` (`RETRY_ENABLED`/`RETRY_COUNT`/`RETRY_DELAY_MS`).
+
+**Status:** complete. Found and fixed a real bug along the way:
+`call_service()`'s retry loop only caught transport exceptions, never a
+declined payment (which `payment-service` returns as a normal HTTP 200 with
+`{"status": "error"}`) — so `RETRY_ENABLED` was a no-op against exactly the
+chaos this phase measures. Fixed in `do_payment()` inside
+`services/order-service/main.py`.
+
+A follow-up full audit of Phases 0–3 (requested separately) found the same
+root cause in three more call sites — user validation and inventory
+availability/reserve (fail via 503, which `httpx` also doesn't turn into an
+exception) and notification (fails the same 200+error-body way payment
+did). Fixed generically in `call_service()` (also retries on 5xx) plus a
+`do_payment()`-style attempt loop for notification. Verified empirically
+per service (30 orders each, one chaos target at a time): user-service
+73%→100%, inventory-service 47%→100%, notification 67%→97% clean success.
+Re-verified Phases 0–2 and the payment scenario show no regression. Full
+detail in `docs/tests/retries-results.md`.
 
 **Steps:**
 1. Inject failure into a downstream dependency, e.g.
@@ -118,17 +136,38 @@ latencia pero reducen errores") using the retry logic already implemented in
    the same k6 run.
 4. Reset chaos: `python cli.py chaos reset payment-service --yes`.
 
-**Files to add:** `docs/tests/retries-results.md` comparing both runs
-(latency increase vs. error-rate reduction vs. baseline).
+**Files added:** `docs/tests/retries-results.md` (three runs: no retries,
+retries with the bug present, retries fixed — plus the bug writeup and
+comparison to Phase 1's baseline).
 
-**Exit criteria:** documented before/after showing retries reduce error rate
-at the cost of latency, relative to Phase 1's baseline.
+**Exit criteria:** met, with a caveat. Retries reduce error rate sharply
+(97% → <1% failed orders under 30% payment failure) once the bug above is
+fixed. Latency did **not** clearly increase with retries in this run (p95
+was lower with retries than without) — see `docs/tests/retries-results.md`
+"Analysis" for why this codebase's failure path doesn't isolate the
+"retries cost latency" trade-off cleanly, and a suggested follow-up
+(latency-based chaos instead of failure-rate-based) if a cleaner signal is
+needed for the report.
 
-## Phase 4 — Circuit breaker scenario
+## Phase 4 — Circuit breaker scenario (done)
 
 **Goal:** validate the `AsyncCircuitBreaker` already wrapping order-service's
 calls to payment-service (`GET /circuit-breaker/payment`,
 `failure_threshold=3`, `recovery_timeout=15s`).
+
+**Status:** complete. Fixed `scripts/k6/with-circuit-breaker.js`'s check
+gap as flagged in Phase 3, plus a custom Counter separating "failed fast
+via open breaker" from "reached payment-service and got declined". Found
+and fixed a real concurrency bug along the way: `AsyncCircuitBreaker`'s
+`OPEN -> HALF_OPEN` transition had no lock, so under concurrent load every
+in-flight request could see the flipped state and slip through together
+(a thundering herd) instead of a single probe — confirmed by polling
+`GET /circuit-breaker/payment` every 2s and watching `failures` overshoot
+the threshold (8-9 instead of a clean 3, then +1 per recovery window).
+Fixed with an `asyncio.Lock` guarding only the state check/transition, not
+the downstream call itself (no throughput cost in the normal `CLOSED`
+path). Re-verified: `failures` now increments by exactly `+1` per 15s
+recovery window. Full writeup: `docs/tests/circuit-breaker-results.md`.
 
 **Steps:**
 1. Drive payment-service to fail consistently:
@@ -141,10 +180,17 @@ calls to payment-service (`GET /circuit-breaker/payment`,
    circuit breaker should fail fast instead of retrying into a dead service.
 4. Reset chaos: `python cli.py chaos reset payment-service --yes`.
 
-**Files to add:** `docs/tests/circuit-breaker-results.md`.
+**Files added:** `docs/tests/circuit-breaker-results.md` (state timeline,
+the concurrency bug, before/after comparison, and full results table
+against Phase 1 and Phase 3).
 
-**Exit criteria:** documented state transitions plus a latency/throughput
-comparison showing reduced cascading failure vs. Phase 3.
+**Exit criteria:** met. 92–97% of failed orders across all runs were
+rejected fast by the open breaker rather than reaching `payment-service` —
+the reduced-cascading-failure result the proposal expects. At 80% payment
+failure, retries barely help (0.4%→4.8% success) unlike Phase 3's 30%
+scenario (3%→99%), which is expected given `P(all 4 attempts fail)` is
+~41% at 80% vs. ~0.8% at 30% — the breaker's fail-fast benefit matters more
+precisely when retries can't realistically rescue the outcome.
 
 ## Phase 5 — Resource usage and observability overhead
 

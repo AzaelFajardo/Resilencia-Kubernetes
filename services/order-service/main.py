@@ -169,6 +169,12 @@ class AsyncCircuitBreaker:
         self.state = CircuitBreakerState.CLOSED
         self.failures = 0
         self.last_failure_time = 0.0
+        # Guards the state check/transition only (not the downstream call
+        # itself) - under concurrent load, without this, every request in
+        # flight when the recovery timeout elapses would independently see
+        # state != OPEN and slip through together (a thundering herd),
+        # instead of a single probe testing recovery.
+        self._lock = asyncio.Lock()
         self._update_metric()
 
     def _update_metric(self):
@@ -180,29 +186,38 @@ class AsyncCircuitBreaker:
         cb_state_gauge.labels(service=self.service_name).set(value)
 
     async def call(self, func, *args, **kwargs):
-        if self.state == CircuitBreakerState.OPEN:
-            if time.time() - self.last_failure_time > self.recovery_timeout:
-                self.state = CircuitBreakerState.HALF_OPEN
-                self._update_metric()
-            else:
+        is_probe = False
+
+        async with self._lock:
+            if self.state == CircuitBreakerState.OPEN:
+                if time.time() - self.last_failure_time > self.recovery_timeout:
+                    self.state = CircuitBreakerState.HALF_OPEN
+                    is_probe = True
+                    self._update_metric()
+                else:
+                    raise CircuitBreakerError("Circuit is OPEN")
+            elif self.state == CircuitBreakerState.HALF_OPEN:
+                # A single probe is already in flight; everyone else fails
+                # fast instead of piling onto the still-recovering service.
                 raise CircuitBreakerError("Circuit is OPEN")
 
         try:
             result = await func(*args, **kwargs)
         except Exception as exc:
-            self.failures += 1
-            self.last_failure_time = time.time()
-            if self.failures >= self.failure_threshold:
-                self.state = CircuitBreakerState.OPEN
-            self._update_metric()
+            async with self._lock:
+                self.failures += 1
+                self.last_failure_time = time.time()
+                if is_probe or self.failures >= self.failure_threshold:
+                    self.state = CircuitBreakerState.OPEN
+                self._update_metric()
             raise exc
 
-        if self.state == CircuitBreakerState.HALF_OPEN:
-            self.state = CircuitBreakerState.CLOSED
-            self.failures = 0
-            self._update_metric()
-        elif self.state == CircuitBreakerState.CLOSED:
-            self.failures = 0
+        async with self._lock:
+            if is_probe or self.state == CircuitBreakerState.HALF_OPEN:
+                self.state = CircuitBreakerState.CLOSED
+                self.failures = 0
+            elif self.state == CircuitBreakerState.CLOSED:
+                self.failures = 0
             self._update_metric()
 
         return result
@@ -310,16 +325,30 @@ async def call_service(
     retries: int = 0,
     json_data: Optional[dict] = None,
 ) -> httpx.Response:
+    # Retries on transport exceptions AND on 5xx responses: httpx does not
+    # raise for an error status code by default, so a chaos-simulated 503
+    # from user-service/inventory-service (apply_chaos() raises
+    # HTTPException(503)) would otherwise never be retried here - it would
+    # just be returned as a normal Response on the first attempt. 4xx is
+    # left alone (e.g. "not enough stock", "user not found") since retrying
+    # a genuine rejection wouldn't change the outcome.
     last_error = None
     attempts = (max(retries, 0) + 1) if RETRY_ENABLED else 1
 
     for attempt in range(attempts):
         try:
-            return await client.request(method, url, timeout=HTTP_TIMEOUT, json=json_data)
+            response = await client.request(method, url, timeout=HTTP_TIMEOUT, json=json_data)
         except Exception as exc:
             last_error = exc
             if attempt < attempts - 1:
                 await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
+            continue
+
+        if response.status_code >= 500 and attempt < attempts - 1:
+            await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
+            continue
+
+        return response
 
     raise last_error
 
@@ -644,46 +673,64 @@ async def create_order(
 
         try:
             async def do_payment():
-                response = await call_service(
-                    client,
-                    "POST",
-                    f"{PAYMENT_SERVICE_URL}/pay",
-                    RETRY_COUNT,
-                    {
-                        "order_id": order.id,
-                        "amount": float(total_amount),
-                        "user_id": req.user_id,
-                        "customer": customer_context,
-                        "security": {
-                            "fraud_score": security.fraud_score,
-                            "session_id": security.session_id,
-                            "device_fingerprint": security.device_fingerprint,
-                            "ip_geolocation": {
-                                "city": security.ip_geolocation.city,
-                                "country": security.ip_geolocation.country,
+                # call_service()'s own retry loop only covers transport-level
+                # exceptions - payment-service's simulated failures come back
+                # as a normal 200 (or 4xx) with a non-success body, which it
+                # would never retry. Retry here instead, across both cases,
+                # so RETRY_ENABLED actually covers the chaos this is meant to
+                # recover from.
+                attempts = (max(RETRY_COUNT, 0) + 1) if RETRY_ENABLED else 1
+                last_error: Optional[DownstreamServiceError] = None
+
+                for attempt in range(attempts):
+                    try:
+                        response = await call_service(
+                            client,
+                            "POST",
+                            f"{PAYMENT_SERVICE_URL}/pay",
+                            0,
+                            {
+                                "order_id": order.id,
+                                "amount": float(total_amount),
+                                "user_id": req.user_id,
+                                "customer": customer_context,
+                                "security": {
+                                    "fraud_score": security.fraud_score,
+                                    "session_id": security.session_id,
+                                    "device_fingerprint": security.device_fingerprint,
+                                    "ip_geolocation": {
+                                        "city": security.ip_geolocation.city,
+                                        "country": security.ip_geolocation.country,
+                                    },
+                                    "is_authenticated": security.is_authenticated,
+                                    "auth_method": security.auth_method,
+                                    "mfa_verified": security.mfa_verified,
+                                    "vpn_detected": security.vpn_detected,
+                                    "request_node_id": security.request_node_id,
+                                },
                             },
-                            "is_authenticated": security.is_authenticated,
-                            "auth_method": security.auth_method,
-                            "mfa_verified": security.mfa_verified,
-                            "vpn_detected": security.vpn_detected,
-                            "request_node_id": security.request_node_id,
-                        },
-                    },
-                )
-                if response.status_code >= 400:
-                    raise DownstreamServiceError(
-                        f"Payment service returned status {response.status_code}",
-                        {"status": "error", "message": response.text},
-                    )
+                        )
+                    except Exception as exc:
+                        last_error = DownstreamServiceError(str(exc), {"status": "error", "message": str(exc)})
+                    else:
+                        if response.status_code >= 400:
+                            last_error = DownstreamServiceError(
+                                f"Payment service returned status {response.status_code}",
+                                {"status": "error", "message": response.text},
+                            )
+                        else:
+                            payload = response.json()
+                            if payload.get("status") == "success":
+                                return payload
+                            last_error = DownstreamServiceError(
+                                payload.get("message", "Payment was rejected"),
+                                payload,
+                            )
 
-                payload = response.json()
-                if payload.get("status") != "success":
-                    raise DownstreamServiceError(
-                        payload.get("message", "Payment was rejected"),
-                        payload,
-                    )
+                    if attempt < attempts - 1:
+                        await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
 
-                return payload
+                raise last_error
 
             payment_data = await payment_cb.call(do_payment)
             downstream["payment"] = payment_data
@@ -769,34 +816,56 @@ async def create_order(
         notification_warning = None
 
         try:
-            notification_response = await call_service(
-                client,
-                "POST",
-                f"{NOTIFICATION_SERVICE_URL}/notify",
-                RETRY_COUNT,
-                {
-                    "order_id": order.id,
-                    "amount": float(total_amount),
-                    "user_id": req.user_id,
-                    "customer": customer_context,
-                    "first_name": first_name,
-                    "language_preference": language_preference,
-                    "gift_message": order.gift_message,
-                },
-            )
-            if notification_response.status_code >= 400:
-                raise DownstreamServiceError(
-                    f"Notification service returned status {notification_response.status_code}",
-                    {"status": "error", "message": notification_response.text},
-                )
+            # Same shape as do_payment(): notification-service's simulated
+            # failure is a normal 200 with {"status": "error"}, which
+            # call_service()'s retry (transport exceptions and 5xx only)
+            # would never catch. Retry here across both cases instead.
+            attempts = (max(RETRY_COUNT, 0) + 1) if RETRY_ENABLED else 1
+            notification_data = None
+            last_notification_error: Optional[DownstreamServiceError] = None
 
-            notification_data = notification_response.json()
-            downstream["notification"] = notification_data
-            if notification_data.get("status") != "sent":
-                raise DownstreamServiceError(
-                    notification_data.get("message", "Notification was not delivered"),
-                    notification_data,
-                )
+            for attempt in range(attempts):
+                try:
+                    notification_response = await call_service(
+                        client,
+                        "POST",
+                        f"{NOTIFICATION_SERVICE_URL}/notify",
+                        0,
+                        {
+                            "order_id": order.id,
+                            "amount": float(total_amount),
+                            "user_id": req.user_id,
+                            "customer": customer_context,
+                            "first_name": first_name,
+                            "language_preference": language_preference,
+                            "gift_message": order.gift_message,
+                        },
+                    )
+                except Exception as exc:
+                    last_notification_error = DownstreamServiceError(str(exc), {"status": "error", "message": str(exc)})
+                else:
+                    if notification_response.status_code >= 400:
+                        last_notification_error = DownstreamServiceError(
+                            f"Notification service returned status {notification_response.status_code}",
+                            {"status": "error", "message": notification_response.text},
+                        )
+                    else:
+                        payload = notification_response.json()
+                        if payload.get("status") == "sent":
+                            notification_data = payload
+                            break
+                        last_notification_error = DownstreamServiceError(
+                            payload.get("message", "Notification was not delivered"),
+                            payload,
+                        )
+
+                if attempt < attempts - 1:
+                    await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
+
+            if notification_data is not None:
+                downstream["notification"] = notification_data
+            else:
+                raise last_notification_error
         except DownstreamServiceError as exc:
             downstream["notification"] = exc.payload or {"status": "error", "message": str(exc)}
             notification_warning = str(exc)
