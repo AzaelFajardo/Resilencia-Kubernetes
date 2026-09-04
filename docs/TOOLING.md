@@ -174,6 +174,25 @@ XML well-formedness (`xml.etree.ElementTree`). JMeter itself is not
 installed as part of Phase 2 by design; running it for real belongs to
 whoever executes Phase 3 onward.
 
+## Resource sampling and OTel overhead toggle (Phase 5)
+
+`scripts/collect_resource_metrics.sh <output.csv> <interval_seconds>
+<iterations>` samples `docker stats --no-stream` for every
+`resilencia-kubernetes-*` container and appends CSV rows. Note: each
+`docker stats --no-stream` call itself takes ~5-6s on Windows/Docker
+Desktop regardless of the requested interval — size `iterations` around
+that real cadence (`test_duration_seconds / ~6`), not the interval
+argument alone.
+
+`OTEL_SDK_DISABLED` (standard OpenTelemetry env var, default `false`) is
+now wired into `compose.yml`/`.env.example` for all 5 microservices. The
+Python SDK already honors it with zero code changes to `tracing.py` —
+`TracerProvider.get_tracer()` returns a `NoOpTracer()` when set, so
+setting it and recreating the affected containers (`docker compose up -d
+--no-deps <service...>`) is enough for a clean A/B latency comparison with
+OTel instrumentation on vs. off. See `docs/tests/resources-observability-results.md`
+for the measured overhead (+35-42% median/p95 latency in this stack).
+
 ## Process notes (things that would otherwise be re-discovered the hard way)
 
 - **Seed stock is small on purpose** (`db/init.sql` gives product 1 only

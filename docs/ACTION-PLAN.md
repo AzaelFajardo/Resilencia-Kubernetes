@@ -192,11 +192,20 @@ scenario (3%→99%), which is expected given `P(all 4 attempts fail)` is
 ~41% at 80% vs. ~0.8% at 30% — the breaker's fail-fast benefit matters more
 precisely when retries can't realistically rescue the outcome.
 
-## Phase 5 — Resource usage and observability overhead
+## Phase 5 — Resource usage and observability overhead (done)
 
 **Goal:** cover the "Recursos" and "Observabilidad" metric sectors: CPU/RAM
 usage, estimated cost per request, OpenTelemetry instrumentation overhead,
 span loss under load, and sampling impact.
+
+**Status:** complete, with one item deliberately not measured (sampling
+impact — see below). `OTEL_SDK_DISABLED` turned out to be a standard OTel
+env var the Python SDK already honors with zero code changes to
+`tracing.py`; only `compose.yml` needed a line added per service (plus
+`.env.example`) to actually forward it into the containers, since Compose
+doesn't pass through arbitrary host env vars. Full detail, all numbers,
+and honest caveats about sample sizes:
+`docs/tests/resources-observability-results.md`.
 
 **Steps:**
 1. Capture `docker stats` (or a scripted equivalent) for all service
@@ -214,12 +223,27 @@ span loss under load, and sampling impact.
    not a Phase 0 bug fix) and re-run the comparison at a lower sampling
    ratio.
 
-**Files to add:** `docs/tests/resources-observability-results.md`; a small
-`scripts/collect_resource_metrics.sh` (or `.ps1`) helper if manual `docker
-stats` capture proves too noisy to record by hand.
+**Files added:** `docs/tests/resources-observability-results.md`;
+`scripts/collect_resource_metrics.sh` (docker-stats-to-CSV sampler, needed
+in practice since `docker stats --no-stream` itself takes ~5-6s per call
+on this machine); `OTEL_SDK_DISABLED` wired into `compose.yml`/
+`.env.example` (default `false`, permanent, reusable for later phases).
 
-**Exit criteria:** documented CPU/RAM usage, estimated cost per request,
-OTel overhead percentage, and span-loss/sampling findings.
+**Exit criteria:** met, mostly. CPU/RAM documented (order-service is the
+clear bottleneck: 83% avg / 110% max CPU under 200-VU load, vs. <1% for
+every other microservice at idle). Rough per-request CPU cost documented
+(order-service ≈40ms CPU/request, roughly as much as all four downstream
+services combined). OTel overhead measured cleanly: **+35-42% median/p95
+latency** with OTel enabled vs. disabled. Span loss: none observed at this
+load level (~21-43 req/s peak — order-service's own CPU ceiling was hit
+well before the tracing pipeline showed any strain, so this doesn't prove
+the pipeline is lossless at higher throughput, just that it wasn't
+stressed here). **Sampling impact was not measured** — deliberately
+deferred since it requires adding sampler configuration to
+`services/*/tracing.py` that doesn't exist yet, which the plan explicitly
+treats as optional new work rather than a Phase 0-style bug fix; a
+concrete implementation note for whoever picks this up is in the results
+doc.
 
 ## Phase 6 — Kubernetes deployment and resilience mechanisms
 

@@ -53,6 +53,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -73,6 +74,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -93,6 +95,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -114,6 +117,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -135,6 +139,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT:  http://otel-collector:4317
+      OTEL_SDK_DISABLED:            ${OTEL_SDK_DISABLED:-false}
       USER_SERVICE_URL:              http://user-service:8000
       INVENTORY_SERVICE_URL:         http://inventory-service:8000
       PAYMENT_SERVICE_URL:           http://payment-service:8000
