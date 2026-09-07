@@ -354,6 +354,40 @@ async def recent_payments(
     return [serialize_payment_record(record) for record in records]
 
 
+@app.get("/payments", response_model=list[PaymentRecordSummary])
+async def list_payments(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> list[PaymentRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(PaymentRecord)
+        .order_by(PaymentRecord.id.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    records = result.scalars().all()
+    return [serialize_payment_record(record) for record in records]
+
+
+@app.delete("/payments/{payment_id}")
+async def delete_payment(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(PaymentRecord).where(PaymentRecord.id == payment_id)
+    )
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    await db.delete(record)
+    await db.commit()
+    return {"message": "Payment deleted successfully", "payment_id": payment_id}
+
+
 @app.get("/payments/by-order/{order_id}", response_model=PaymentRecordSummary)
 async def get_payment_by_order(
     order_id: int,

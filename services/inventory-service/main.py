@@ -9,7 +9,7 @@ to simulate a production-grade Amazon-like system.
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 import asyncio
@@ -332,11 +332,14 @@ async def generate_inventory(db: AsyncSession = Depends(get_db)):
 
 @app.get("/inventory", response_model=List[Product])
 async def list_inventory(
-    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> List[Product]:
     await apply_chaos()
-    result = await db.execute(select(DBProduct).order_by(desc(DBProduct.id)).limit(limit))
+    result = await db.execute(
+        select(DBProduct).order_by(desc(DBProduct.id)).offset(offset).limit(limit)
+    )
     products = result.scalars().all()
     return [construct_product_model(product) for product in products]
 
@@ -471,3 +474,69 @@ def update_chaos_config(config: ChaosConfig):
             "TIMEOUT_RATE": TIMEOUT_RATE
         }
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MANUAL PRODUCT CRUD  –  POST / PATCH / DELETE
+# ═══════════════════════════════════════════════════════════════════════
+
+class ProductUpdate(BaseModel):
+    """Partial update body: only the provided fields are applied."""
+    quantity: Optional[int] = Field(default=None, ge=0)
+    data: Optional[dict] = None
+
+
+@app.post("/inventory", response_model=Product)
+async def create_product(product: Product, db: AsyncSession = Depends(get_db)) -> Product:
+    """Creates a product manually. Returns 409 if the id already exists."""
+    await apply_chaos()
+    result = await db.execute(select(DBProduct).filter(DBProduct.id == product.product_id))
+    if result.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail=f"Product {product.product_id} already exists")
+    data_dict = product.model_dump() if hasattr(product, "model_dump") else product.dict()
+    db.add(DBProduct(id=product.product_id, quantity=product.quantity, data=data_dict))
+    await db.commit()
+    return product
+
+
+@app.patch("/inventory/{product_id}", response_model=ProductResponse)
+async def update_product(
+    product_id: int,
+    patch: ProductUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> ProductResponse:
+    """Partially updates a product by ID, serialized like the detail GET."""
+    await apply_chaos()
+    db_product = await get_db_product_or_404(product_id, db)
+
+    if patch.quantity is not None:
+        db_product.quantity = patch.quantity
+
+    if patch.data is not None:
+        merged_data = db_product.data.copy()
+        merged_data.update(patch.data)
+        db_product.data = merged_data
+
+    await db.commit()
+    product = construct_product_model(db_product)
+    return ProductResponse(
+        metadata=build_metadata(request),
+        security=build_security(request),
+        item=product,
+    )
+
+
+@app.delete("/inventory/{product_id}")
+async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
+    """Deletes a product by ID.
+
+    The database defines an ``orders`` table with a foreign key to
+    ``products(id)`` using ``ON DELETE CASCADE``, so any orders referencing
+    this product are removed automatically along with it.
+    """
+    await apply_chaos()
+    db_product = await get_db_product_or_404(product_id, db)
+    await db.delete(db_product)
+    await db.commit()
+    return {"message": f"Product {product_id} deleted."}

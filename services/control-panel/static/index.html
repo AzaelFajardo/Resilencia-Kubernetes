@@ -57,8 +57,47 @@
   </section>
 
   <section>
+    <h2>Latencia por servicio (p50 / p95 / p99)</h2>
+    <table id="latency"><thead><tr><th>Servicio</th><th>p50 (s)</th><th>p95 (s)</th><th>p99 (s)</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
     <h2>Recursos (CPU / RAM / Escritura de disco)</h2>
     <table id="resources"><thead><tr><th>Instancia</th><th>CPU (cores)</th><th>RAM (MiB)</th><th>Disco escrito (MiB)</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section class="full">
+    <h2>Alertas</h2>
+    <div id="alerts" class="muted">cargando…</div>
+  </section>
+
+  <section class="full">
+    <h2>Administrar datos (CRUD por entidad)</h2>
+    <form id="crudForm" style="margin-bottom:4px">
+      <select id="crudEntity">
+        <option value="users">users</option><option value="products">products</option>
+        <option value="orders">orders</option><option value="payments">payments</option>
+        <option value="notifications">notifications</option>
+      </select>
+      <input id="crudOffset" type="number" min="0" value="0" style="width:70px" placeholder="offset">
+      <input id="crudLimit" type="number" min="1" max="200" value="20" style="width:70px" placeholder="limit">
+      <button type="submit">Listar</button>
+    </form>
+    <div style="display:flex;gap:8px;margin-bottom:6px">
+      <input id="crudCreateJson" type="text" placeholder='JSON para crear (ej. {"first_name":"Ana"})' style="flex:1;width:auto;min-width:200px">
+      <button class="secondary" id="crudCreateBtn">Crear</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:6px">
+      <input id="crudEditId" type="number" min="1" placeholder="id a editar" style="width:90px">
+      <input id="crudEditJson" type="text" placeholder='Campos a editar en JSON (ej. {"active":false})' style="flex:1;width:auto;min-width:200px">
+      <button class="secondary" id="crudEditBtn">Guardar cambios</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:6px">
+      <input id="crudDeleteId" type="number" min="1" placeholder="id a borrar" style="width:90px">
+      <button class="secondary danger" id="crudDeleteBtn" style="border-color:var(--red);color:var(--red)">Borrar</button>
+    </div>
+    <div id="crudMsg" class="msg"></div>
+    <pre id="crudResult" class="muted" style="max-height:300px">—</pre>
   </section>
 
   <section class="full">
@@ -169,6 +208,78 @@ async function refreshHealth() {
   } catch (e) { /* keep last state on transient failure */ }
 }
 
+async function refreshLatency() {
+  try {
+    const data = await api('/api/latency');
+    const tbody = document.querySelector('#latency tbody');
+    tbody.innerHTML = Object.entries(data).map(([k, v]) =>
+      `<tr><td>${k}-service</td><td>${v.p50 ?? '—'}</td><td>${v.p95 ?? '—'}</td><td>${v.p99 ?? '—'}</td></tr>`).join('')
+      || '<tr><td class="muted" colspan="4">sin datos de latencia</td></tr>';
+  } catch (e) {}
+}
+
+async function refreshAlerts() {
+  const el = $('alerts');
+  try {
+    const data = await api('/api/alerts');
+    const rules = data.groups || [];
+    if (!rules.length) { el.innerHTML = '<span class="muted">sin reglas de alerta cargadas</span>'; return; }
+    el.innerHTML = rules.map(r => {
+      const state = r.state || 'inactive';
+      const color = state === 'firing' ? 'var(--red)' : state === 'pending' ? 'var(--yellow)' : 'var(--muted)';
+      const ann = r.annotations || {};
+      return `<div class="row"><span><span class="dot" style="background:${color}"></span>${r.name} <span class="muted">(${state})</span></span><span class="muted">${ann.summary || ann.description || ''}</span></div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = '<span class="muted">alertas no disponibles</span>'; }
+}
+
+async function crudList() {
+  const entity = $('crudEntity').value;
+  const offset = parseInt($('crudOffset').value) || 0;
+  const limit = parseInt($('crudLimit').value) || 20;
+  try {
+    const r = await api(`/api/entities/${entity}?offset=${offset}&limit=${limit}`);
+    $('crudMsg').className = 'msg ok';
+    $('crudMsg').textContent = `OK — ${Array.isArray(r) ? r.length + ' registros' : 'respuesta recibida'}`;
+    $('crudResult').textContent = JSON.stringify(r, null, 2);
+  } catch (err) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = err.message; }
+}
+
+async function crudCreate() {
+  const entity = $('crudEntity').value;
+  let body;
+  try { body = JSON.parse($('crudCreateJson').value); }
+  catch (e) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = 'JSON inválido: ' + e.message; return; }
+  try {
+    const r = await api(`/api/entities/${entity}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('crudMsg').className = 'msg ok'; $('crudMsg').textContent = 'Creado OK'; $('crudResult').textContent = JSON.stringify(r, null, 2);
+  } catch (err) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = err.message; }
+}
+
+async function crudEdit() {
+  const entity = $('crudEntity').value;
+  const id = parseInt($('crudEditId').value);
+  if (!id) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = 'Indica un id a editar'; return; }
+  let body;
+  try { body = JSON.parse($('crudEditJson').value); }
+  catch (e) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = 'JSON inválido: ' + e.message; return; }
+  try {
+    const r = await api(`/api/entities/${entity}/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('crudMsg').className = 'msg ok'; $('crudMsg').textContent = 'Guardado OK'; $('crudResult').textContent = JSON.stringify(r, null, 2);
+  } catch (err) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = err.message; }
+}
+
+async function crudDelete() {
+  const entity = $('crudEntity').value;
+  const id = parseInt($('crudDeleteId').value);
+  if (!id) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = 'Indica un id a borrar'; return; }
+  if (!confirm(`¿Borrar ${entity} id=${id}? (borrado en cascada según FK de la BD)`)) return;
+  try {
+    const r = await api(`/api/entities/${entity}/${id}`, { method: 'DELETE' });
+    $('crudMsg').className = 'msg ok'; $('crudMsg').textContent = 'Borrado OK'; $('crudResult').textContent = JSON.stringify(r, null, 2);
+  } catch (err) { $('crudMsg').className = 'msg err'; $('crudMsg').textContent = err.message; }
+}
+
 async function refreshResources() {
   try {
     const [res, disk] = await Promise.all([api('/api/resources'), api('/api/disk').catch(() => ({}))]);
@@ -220,9 +331,14 @@ async function refreshCounts() {
   } catch (e) {}
 }
 
-function tick() { refreshHealth(); refreshResources(); refreshCB(); refreshCounts(); refreshKubernetes(); }
+function tick() { refreshHealth(); refreshResources(); refreshLatency(); refreshAlerts(); refreshCB(); refreshCounts(); refreshKubernetes(); }
 tick();
 setInterval(tick, 5000);
+
+$('crudForm').addEventListener('submit', (e) => { e.preventDefault(); crudList(); });
+$('crudCreateBtn').addEventListener('click', crudCreate);
+$('crudEditBtn').addEventListener('click', crudEdit);
+$('crudDeleteBtn').addEventListener('click', crudDelete);
 
 $('chaosForm').addEventListener('submit', async (e) => {
   e.preventDefault();

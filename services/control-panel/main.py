@@ -16,7 +16,7 @@ out of scope for this pass. See README note in this service's directory.
 """
 import os
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -103,6 +103,28 @@ async def config():
     return {"grafana_url": GRAFANA_PUBLIC_URL, "k8s_available": bool(K8S_API_SERVER)}
 
 
+@app.get("/api/latency")
+async def latency():
+    """Per-service latency percentiles (p50/p95/p99) from each service's own
+    Prometheus histogram (http_request_duration_seconds), not just
+    order-service's. Query params are URL-encoded inside PromQL; instance
+    labels are <service>:8000 per the scrape config."""
+    async with httpx.AsyncClient() as client:
+        out = {}
+        for key in SERVICES:
+            quantiles = {}
+            for q, expr in (
+                ("p50", f'histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
+                ("p95", f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
+                ("p99", f'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
+            ):
+                code, body = await _get(client, f"{PROMETHEUS_URL}/api/v1/query?query={expr}")
+                vals = body.get("data", {}).get("result", []) if code == 200 else []
+                quantiles[q] = round(float(vals[0]["value"][1]), 4) if vals else None
+            out[key] = quantiles
+        return out
+
+
 @app.get("/api/disk")
 async def disk():
     """Disk write bytes per service container, read from Docker's own
@@ -173,6 +195,29 @@ async def kubernetes_status():
         return {"pods": pods, "hpas": hpas}
 
 
+@app.get("/api/alerts")
+async def alerts():
+    """Prometheus alert rules and their current state (firing/pending/inactive)
+    via the /api/v1/rules endpoint."""
+    async with httpx.AsyncClient() as client:
+        code, body = await _get(client, f"{PROMETHEUS_URL}/api/v1/rules")
+        if code != 200:
+            return {"groups": [], "error": "Prometheus unreachable"}
+        out = []
+        for group in body.get("data", {}).get("groups", []):
+            for rule in group.get("rules", []):
+                if rule.get("type") != "alert":
+                    continue
+                out.append({
+                    "name": rule.get("name"),
+                    "state": rule.get("state"),
+                    "health": rule.get("health"),
+                    "labels": rule.get("labels", {}),
+                    "annotations": rule.get("annotations", {}),
+                })
+        return {"groups": out}
+
+
 @app.get("/api/circuit-breaker")
 async def circuit_breaker():
     async with httpx.AsyncClient() as client:
@@ -215,6 +260,115 @@ async def recent(entity: str, limit: int = 10):
         if code != 200:
             raise HTTPException(status_code=502, detail=f"{svc}-service unreachable")
         return body
+
+
+# ── CRUD proxies (Phase 12 completion) ─────────────────────────────────
+# Generic write-through proxies to the CRUD endpoints added to each
+# microservice (PUT/PATCH/DELETE + paginated list endpoints). The panel is
+# still a thin client - all business rules live in the services.
+
+_ENTITY_MAP = {
+    "users": "user",
+    "products": "inventory",
+    "orders": "order",
+    "payments": "payment",
+    "notifications": "notification",
+}
+
+
+async def _proxy_json(method: str, url: str, body=None, timeout: float = 15.0):
+    async with httpx.AsyncClient() as client:
+        r = await client.request(method, url, json=body, timeout=timeout)
+    if r.status_code >= 400:
+        detail = ""
+        try:
+            detail = r.json().get("detail", r.text)
+        except Exception:
+            detail = r.text
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+
+@app.get("/api/entities/{entity}")
+async def list_entity(entity: str, offset: int = 0, limit: int = 20):
+    """Paginated list for an entity. Uses the new paginated GET endpoint on
+    services that have one (/payments, /notifications); falls back to the
+    service's existing list endpoint where one exists (/users, /inventory)."""
+    svc = _ENTITY_MAP.get(entity)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="unknown entity")
+    if entity == "payments":
+        path = f"/payments?offset={offset}&limit={limit}"
+    elif entity == "notifications":
+        path = f"/notifications?offset={offset}&limit={limit}"
+    elif entity == "users":
+        path = f"/users?offset={offset}&limit={limit}"
+    elif entity == "products":
+        path = f"/inventory?offset={offset}&limit={limit}"
+    else:  # orders
+        path = f"/orders/recent?limit={limit}"
+    return await _proxy_json("GET", f"{SERVICES[svc]}{path}")
+
+
+@app.post("/api/entities/{entity}")
+async def create_entity(entity: str, request: Request):
+    svc = _ENTITY_MAP.get(entity)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="unknown entity")
+    body = await request.json()
+    path = {"users": "/users", "products": "/inventory", "orders": "/orders"}.get(entity)
+    if path is None:
+        raise HTTPException(status_code=400, detail=f"manual create not supported for {entity}")
+    return await _proxy_json("POST", f"{SERVICES[svc]}{path}", body=body, timeout=30.0)
+
+
+@app.patch("/api/entities/{entity}/{item_id}")
+async def update_entity(entity: str, item_id: int, request: Request):
+    svc = _ENTITY_MAP.get(entity)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="unknown entity")
+    body = await request.json()
+    base = f"{SERVICES[svc]}"
+    if entity == "users":
+        # UI sends raw profile fields; user-service expects {"data": {...}}.
+        path = f"/users/{item_id}"
+        body = {"data": body}
+    elif entity == "products":
+        path = f"/inventory/{item_id}"
+        # inventory-service PATCH expects {quantity?, data?}. The UI may send
+        # any product field directly: quantity maps to its own column and
+        # every other key goes into the JSONB data merge.
+        quantity = body.pop("quantity", None)
+        patch_body = {"data": body} if body else {}
+        if quantity is not None:
+            patch_body["quantity"] = quantity
+        body = patch_body
+    elif entity == "orders":
+        # Order edits go through the status endpoint (status/priority/
+        # internal_status), the only mutable order fields by design.
+        path = f"/orders/{item_id}/status"
+    else:
+        raise HTTPException(status_code=400, detail=f"edit not supported for {entity}")
+    return await _proxy_json("PATCH", f"{base}{path}", body=body)
+
+
+@app.delete("/api/entities/{entity}/{item_id}")
+async def delete_entity(entity: str, item_id: int):
+    svc = _ENTITY_MAP.get(entity)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="unknown entity")
+    base = f"{SERVICES[svc]}"
+    path = {
+        "users": f"/users/{item_id}",
+        "products": f"/inventory/{item_id}",
+        "orders": f"/orders/{item_id}",
+        "payments": f"/payments/{item_id}",
+        "notifications": f"/notifications/{item_id}",
+    }[entity]
+    return await _proxy_json("DELETE", f"{base}{path}")
 
 
 @app.get("/api/users/{user_id}/orders")

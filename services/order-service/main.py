@@ -138,6 +138,12 @@ class OrderRecordSummary(BaseModel):
     updated_at: Optional[str]
 
 
+class OrderStatusUpdate(BaseModel):
+    status: Optional[str] = None
+    internal_status: Optional[str] = None
+    priority: Optional[str] = None
+
+
 class CircuitBreakerState(str, Enum):
     CLOSED = "CLOSED"
     OPEN = "OPEN"
@@ -485,6 +491,49 @@ async def get_order(order_id: int, db: AsyncSession = Depends(get_db)) -> OrderR
     if db_order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return serialize_order_record(db_order)
+
+
+@app.patch("/orders/{order_id}/status", response_model=OrderRecordSummary)
+async def update_order_status(
+    order_id: int,
+    update: OrderStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> OrderRecordSummary:
+    """Partially update status-related fields (status, internal_status, priority)."""
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    db_order = result.scalars().first()
+    if db_order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if update.status is not None:
+        valid_statuses = [status.value for status in OrderStatus]
+        if update.status not in valid_statuses:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid status '{update.status}'. Allowed values: {', '.join(valid_statuses)}",
+            )
+        db_order.status = OrderStatus(update.status)
+    if update.internal_status is not None:
+        db_order.internal_status = update.internal_status
+    if update.priority is not None:
+        db_order.priority = update.priority
+    db_order.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(db_order)
+    return serialize_order_record(db_order)
+
+
+@app.delete("/orders/{order_id}")
+async def delete_order(order_id: int, db: AsyncSession = Depends(get_db)):
+    """Delete an order. Payments and notifications are removed in cascade."""
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    db_order = result.scalars().first()
+    if db_order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    await db.delete(db_order)
+    await db.commit()
+    return {"message": f"Order {order_id} deleted (payments and notifications removed in cascade)"}
 
 
 @app.post("/orders")

@@ -141,6 +141,11 @@ class ChaosConfig(BaseModel):
     LATENCY_MS: Optional[int] = None
     TIMEOUT_RATE: Optional[float] = None
 
+class UserPatch(BaseModel):
+    """Partial profile update. Only ``data`` is accepted; its keys are
+    shallow-merged over the existing JSONB profile."""
+    data: Optional[dict] = None
+
 # ── Response model wrapping customer data with global fields ───────────
 class CustomerResponse(BaseModel):
     """Full response envelope including metadata, security, and customer data."""
@@ -339,10 +344,16 @@ async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) ->
 
 
 @app.get("/users", response_model=List[Customer])
-async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
-    """Lists all customers."""
+async def list_users(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> List[Customer]:
+    """Lists customers, ordered by id ascending, with offset/limit pagination."""
     await apply_chaos()
-    result = await db.execute(select(User))
+    result = await db.execute(
+        select(User).order_by(User.id.asc()).offset(offset).limit(limit)
+    )
     users = result.scalars().all()
     return [build_customer_model(u.data) for u in users]
 
@@ -398,6 +409,46 @@ async def get_user(user_id: int, request: Request, db: AsyncSession = Depends(ge
         security=build_security(request),
         customer=customer,
     )
+
+
+@app.patch("/users/{user_id}", response_model=Customer)
+async def update_user(
+    user_id: int,
+    patch: UserPatch,
+    db: AsyncSession = Depends(get_db),
+) -> Customer:
+    """Partially updates a customer profile. Fields present in ``patch.data``
+    are merged over the existing profile (shallow merge), so callers can send
+    e.g. ``{"data": {"active": false}}`` without resending all 20 fields."""
+    await apply_chaos()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    db_user = result.scalars().first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    if patch.data is not None:
+        merged = (db_user.data or {}).copy()
+        merged.update(patch.data)
+        db_user.data = merged
+
+    await db.commit()
+    await db.refresh(db_user)
+    return build_customer_model(db_user.data)
+
+
+@app.delete("/users/{user_id}")
+async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Deletes a customer by identifier. The database cascades the delete to
+    related orders/payments/notifications rows (study tool: FK ON DELETE CASCADE)."""
+    await apply_chaos()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    db_user = result.scalars().first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    await db.delete(db_user)
+    await db.commit()
+    return {"message": f"Customer {user_id} deleted"}
 
 
 @app.get("/users/{user_id}/validate", response_model=CustomerValidationResponse)

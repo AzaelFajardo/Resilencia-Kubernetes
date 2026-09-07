@@ -377,6 +377,40 @@ async def get_notification_by_order(
     return serialize_notification_record(record)
 
 
+@app.get("/notifications", response_model=list[NotificationRecordSummary])
+async def list_notifications(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> list[NotificationRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(NotificationRecord)
+        .order_by(NotificationRecord.id)
+        .offset(offset)
+        .limit(limit)
+    )
+    records = result.scalars().all()
+    return [serialize_notification_record(record) for record in records]
+
+
+@app.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(NotificationRecord).where(NotificationRecord.id == notification_id)
+    )
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    await db.delete(record)
+    await db.commit()
+    return {"message": "Notification deleted", "notification_id": notification_id}
+
+
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
     global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
