@@ -568,6 +568,165 @@ configurable and its impact measured; JMeter has a real completed run
 comparable to k6's; the regression pass found no behavior changes from
 Phase 10.
 
+## Phase 12 — Administration & monitoring control panel
+
+**Status:** partial. Built `services/control-panel/` (FastAPI backend +
+single static page), added as a Compose service on port 8105. Delivers
+the **Monitor** half in full: service health, per-service CPU/RAM/disk-write
+(disk via the Docker socket - `prometheus_client`'s ProcessCollector has no
+I/O metric, so this isn't in Prometheus), circuit breaker state, record
+counts, a live **Kubernetes** panel (pods + HPA status, read directly from
+the minikube API server via mounted client certs, `verify=False` since the
+cert is issued for the cluster's own hostname not `host.docker.internal`
+- a local-dev-only cluster, not a real trust boundary), and an embedded
+**Grafana** dashboard (iframe in kiosk mode; `GF_SECURITY_ALLOW_EMBEDDING`/
+`GF_AUTH_ANONYMOUS_ENABLED` added to Grafana's Compose config so the iframe
+doesn't need a login). The **Operate** half uses only APIs that already
+existed (place orders, generate users/inventory, view recent records,
+per-user order history, chaos control per service). **Not delivered:**
+real create/edit/delete of existing records - none of the 5 microservices
+expose PUT/DELETE routes, and adding them was out of scope (would mean new
+endpoints in 5 services, not just a UI); the Kubernetes panel is read-only
+(no delete-pod / scale button). Design-skill process (`claude-design`, HTML
+mockups rendered to PNG first) was skipped under time constraints - built
+directly instead. Verified live: every API route tested via curl (health,
+resources, disk, kubernetes, circuit-breaker, chaos, orders, generate,
+recent, order history), Grafana iframe and Kubernetes tables confirmed
+rendering real data in-browser.
+
+**Goal:** give the team a single web interface that (a) monitors the live
+system — metrics, Grafana, Kubernetes, and per-service resource usage —
+and (b) administers the data completely and in a controlled way: add,
+edit and delete users, products, orders, payments and notifications,
+place orders, generate data, and set a failure standard (chaos) per
+service. This deliberately **reverses Phase 9's "skip" decision**: the
+audit that led to Phase 12 found a real gap the earlier decision missed —
+today no surface (cli.py or Grafana) can *edit or delete* records or show
+per-service resource usage in one place, so a "team control interface"
+that can only read and bulk-generate is incomplete for day-to-day
+administration and monitoring.
+
+**Scope decision:** local study tool — **no login/authentication**. The
+UI talks to the services over the host-published ports, same as `cli.py`
+and the README's curl examples.
+
+**Design instruction (for whoever builds the UI — Claude):** build the
+panel as a *Monitor + Operate* interface (dense, glanceable hierarchy;
+action affordances; no marketing framing, no decorative metrics). Use the
+installed design skills, by name: `claude-design` (design process and
+taste, surface-first, anti-slop), `ui-mockup-screens` and
+`html-mockup-render` (build the screens as self-contained HTML mockups and
+render/verify them to PNG before wiring them to the live data). Follow the
+repo's stack (`services/frontend/` was the original UI location; Phase 0
+removed it — recreate under `services/control-panel/`). Flat, minimalist,
+professional dashboard style; functional graphs with real data, never fake
+numbers. No emojis, no gradients/glassmorphism by default.
+
+**Audited baseline the panel must build on (what already exists):**
+- Every microservice already exposes `/metrics`
+  (`prometheus_fastapi_instrumentator` + `prometheus_client`):
+  `http_request_duration_seconds` (histogram), `http_requests_total`,
+  `process_cpu_seconds_total`, `process_resident_memory_bytes`; plus a
+  `circuit_breaker_state` gauge on `order-service`.
+- Grafana `Resilencia Overview` dashboard (Phase 8) already has 12 panels
+  across the four sectors: Performance (p50/p95/p99 latency, throughput),
+  Resilience (circuit-breaker state, healthy targets), Resources
+  (per-service CPU + resident memory), Observability (scrape health).
+- Prometheus scrapes all 5 microservices + `otel-collector`.
+- **Gaps the panel must close (found in this audit):**
+  1. Only `order-service`'s latency histogram is surfaced in Grafana by
+     handler; per-service latency for the other four is not shown.
+  2. **No disk / block-I/O metrics anywhere** — no cadvisor, no
+     node-exporter. To honor "escritura de disco" the stack needs a source
+     (add `cadvisor` (or `node-exporter`) to `compose.yml`/Prometheus
+     scrape config) so container disk/network I/O can be charted.
+  3. No CORS on any service; no CRUD edit/delete endpoints; list endpoints
+     cap at `limit <= 100` (no pagination/offset/search).
+
+**Steps (backend first — the UI can't administer what the API can't
+change):**
+
+1. Enable **CORS** on all 5 microservices (or serve the panel from an
+   origin the APIs allow) so a browser SPA can call the existing and new
+   endpoints.
+2. Add **pagination + search/filter** (`offset`/`limit`, filters) to the
+   list endpoints — today `/*/recent` and list endpoints cap at
+   `limit <= 100` and only return the most recent rows, which is unusable
+   for exploring a 50k-user dataset. Support sorting and keyword/field
+   filters per entity.
+3. Add the missing **write endpoints** per service, following each
+   service's existing `create_*`/serialization patterns:
+   - `user-service`: `PUT`/`PATCH /users/{id}` (edit customer profile),
+     `DELETE /users/{id}`.
+   - `inventory-service`: `POST /inventory` (create a product by hand),
+     `PATCH /products/{id}` (quantity, price, data), `DELETE /products/{id}`.
+   - `order-service`: `PATCH /orders/{id}/status` (status, priority,
+     internal_status), `DELETE /orders/{id}`.
+   - `payment-service`: paginated `GET /payments`, `DELETE /payments/{id}`.
+   - `notification-service`: paginated `GET /notifications`,
+     `DELETE /notifications/{id}`.
+4. Add **per-service latency/error metrics surfacing** in the panel from
+   each service's own `/metrics` histogram
+   (`http_request_duration_seconds{handler=...}` grouped by service),
+   not just order-service's.
+5. Add a **host/infrastructure metric source**: add `cadvisor` (or
+   `node-exporter`) to `compose.yml` and to Prometheus
+   (`observability/prometheus.yml`) so CPU, RAM and **disk write/block I/O**
+   per container (and per pod in K8s) can be charted.
+6. Provide **guided JSONB editing** of the nested profile/details fields
+   (the ~105 fields from `Campos por servicio.md`), not raw JSON — the
+   panel exposes concrete fields per entity (name, email, stock, price,
+   shipping address, etc.) and serializes them back into the JSONB
+   columns. Raw JSON editing only as a power-user fallback. All edits go
+   through the API with server-side **validation** (same rules the
+   create/order flow enforces) and a confirm/undo affordance in the UI.
+7. Build the **frontend panel** (`services/control-panel/`, a static SPA
+   served alongside the stack) as **a dashboard root plus one subpage per
+   service**, so each microservice has its own dedicated view where you
+   monitor, modify, delete and add records in a controlled way. Layout:
+   - **Root dashboard**: overall system health, record counts per entity,
+     per-service up/down, latency/error summaries, and the four metric
+     sectors. Provide a view that **embeds or links the Grafana
+     `Resilencia Overview` dashboard** (Phase 8) and, separately, a
+     **Kubernetes view** (pods, replicas, HPA, per-pod CPU/RAM/disk)
+     for the Phase 6+ cluster.
+   - **Per-service subpage** (×5: order, user, inventory, payment,
+     notification): that service's own metrics (latency p50/p95/p99,
+     throughput, error rate, CPU, RAM, disk I/O) + its CRUD table
+     (list/search/page/edit/delete) + its chaos control.
+   - **Infrastructure subpage**: Prometheus / Grafana / Jaeger /
+     otel-collector status, host CPU/RAM/disk, cadvisor/node-exporter
+     panels.
+   - **Chaos / fault view**: set and reset a failure standard per service
+     (failure rate, latency, timeout — the "estándar de fallo" the
+     original UI exposed), with validation and a confirmation step, and
+     show circuit-breaker state — moving `cli.py`'s controls into the UI.
+   - **Actions view**: place an order, generate users/products, show
+     counts (mirrors `cli.py`).
+   - **Alerts view**: surface Prometheus alert rules (once Phase 11 adds
+     them) and highlight services in a degraded/chaos state, breaker
+     `OPEN`, error spikes, or pods restarting.
+8. Wire the panel into `compose.yml` (and the Phase 6+ Kubernetes
+   manifests once Phase 10's parity work lands) with its own port.
+
+**Files to add/change:** `services/*/main.py` (5 services: CORS,
+pagination, CRUD endpoints), new `services/control-panel/` (SPA),
+`compose.yml` (+ control-panel service and cadvisor/node-exporter),
+`observability/prometheus.yml` (+ cadvisor/node-exporter scrape job),
+Grafana dashboard additions if per-service panels are added, docs update
+(`docs/TOOLING.md`, `README.md`, `docs/01.Arquitectura.md`).
+
+**Exit criteria:** from the panel (no terminal, no direct DB access) a
+user can view live metrics in all four sectors plus per-service and
+per-pod CPU/RAM/disk; list/search/page every entity; add, edit and delete
+a user, product, order, payment and notification with validation; place
+an order; generate users/products; set and reset a failure standard per
+service and observe the circuit breaker; see infrastructure status and
+alerts — all against the Compose stack (the primary target) and, once
+Phase 10 lands, against the hardened Kubernetes cluster without code
+changes. UI verified by rendering the mockups (via `ui-mockup-screens` /
+`html-mockup-render`) before wiring live data.
+
 ## Reproducible delivery (cross-cutting, ongoing)
 
 Applies across all phases, not a separate phase to "finish":

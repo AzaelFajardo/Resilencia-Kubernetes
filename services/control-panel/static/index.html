@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Resilencia-Kubernetes — Control Panel</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--border:#2a2e37;--text:#e6e8eb;--muted:#8b93a1;
+        --green:#3ecf8e;--red:#e5484d;--yellow:#f5a623;--accent:#5b8def;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:16px}
+  header h1{font-size:14px;font-weight:600;margin:0;letter-spacing:.02em}
+  header .links a{color:var(--muted);text-decoration:none;margin-right:14px;font-size:12px}
+  header .links a:hover{color:var(--accent)}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:14px}
+  section h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:500;font-size:11px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .up{background:var(--green)} .down{background:var(--red)}
+  .badge{padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600}
+  .badge.CLOSED{background:#123a2a;color:var(--green)}
+  .badge.OPEN{background:#3a1414;color:var(--red)}
+  .badge.HALF_OPEN{background:#3a2f0f;color:var(--yellow)}
+  form{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+  input,select,button{background:#0f1115;border:1px solid var(--border);color:var(--text);
+    padding:6px 8px;border-radius:4px;font-size:12px}
+  input{width:90px}
+  button{cursor:pointer;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button:hover{opacity:.9}
+  button.secondary{background:transparent;color:var(--text);border-color:var(--border)}
+  .full{grid-column:1/-1}
+  pre{background:#0f1115;padding:8px;border-radius:4px;overflow:auto;max-height:220px;font-size:11px;margin:0}
+  .muted{color:var(--muted)}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:4px 0}
+  .msg{font-size:11px;padding:4px 0;min-height:16px}
+  .msg.ok{color:var(--green)} .msg.err{color:var(--red)}
+</style>
+</head>
+<body>
+<header>
+  <h1>RESILENCIA-KUBERNETES · CONTROL PANEL</h1>
+  <div class="links">
+    <a href="http://localhost:3001" target="_blank">Grafana</a>
+    <a href="http://localhost:16687" target="_blank">Jaeger</a>
+    <a href="http://localhost:9091" target="_blank">Prometheus</a>
+  </div>
+</header>
+<main>
+
+  <section>
+    <h2>Salud de servicios</h2>
+    <table id="health"><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Recursos (CPU / RAM / Escritura de disco)</h2>
+    <table id="resources"><thead><tr><th>Instancia</th><th>CPU (cores)</th><th>RAM (MiB)</th><th>Disco escrito (MiB)</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section class="full">
+    <h2>Kubernetes (minikube)</h2>
+    <div id="k8sStatus" class="muted">cargando…</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px">
+      <div>
+        <div class="muted" style="font-size:11px;margin-bottom:4px">PODS</div>
+        <table id="k8sPods"><thead><tr><th>Pod</th><th>Fase</th><th>Ready</th><th>Restarts</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div>
+        <div class="muted" style="font-size:11px;margin-bottom:4px">HORIZONTAL POD AUTOSCALERS</div>
+        <table id="k8sHpa"><thead><tr><th>HPA</th><th>Réplicas</th><th>CPU actual/objetivo</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="full">
+    <h2>Grafana — Resilencia Overview</h2>
+    <iframe id="grafanaFrame" style="width:100%;height:900px;border:1px solid var(--border);border-radius:4px;background:#0f1115"
+      src="about:blank" loading="lazy"></iframe>
+  </section>
+
+  <section>
+    <h2>Circuit breaker (order → payment)</h2>
+    <div id="cb" class="row"></div>
+  </section>
+
+  <section>
+    <h2>Conteos</h2>
+    <table id="counts"><tbody></tbody></table>
+  </section>
+
+  <section class="full">
+    <h2>Chaos por servicio</h2>
+    <form id="chaosForm">
+      <select id="chaosService">
+        <option value="order">order</option><option value="user">user</option>
+        <option value="inventory">inventory</option><option value="payment">payment</option>
+        <option value="notification">notification</option>
+      </select>
+      <input id="failureRate" type="number" step="0.1" min="0" max="1" placeholder="FAILURE_RATE">
+      <input id="latencyMs" type="number" step="100" min="0" placeholder="LATENCY_MS">
+      <input id="timeoutRate" type="number" step="0.1" min="0" max="1" placeholder="TIMEOUT_RATE">
+      <button type="submit">Aplicar</button>
+      <button type="button" class="secondary" id="chaosResetAll">Reset todos</button>
+    </form>
+    <div id="chaosMsg" class="msg"></div>
+  </section>
+
+  <section>
+    <h2>Colocar orden</h2>
+    <form id="orderForm">
+      <input id="orderUser" type="number" value="1" placeholder="user_id">
+      <input id="orderProduct" type="number" value="1" placeholder="product_id">
+      <input id="orderQty" type="number" value="1" min="1" placeholder="qty">
+      <button type="submit">Colocar</button>
+    </form>
+    <div id="orderMsg" class="msg"></div>
+    <pre id="orderResult" class="muted">—</pre>
+  </section>
+
+  <section>
+    <h2>Historial de pedidos por usuario</h2>
+    <form id="historyForm">
+      <input id="historyUser" type="number" value="1" placeholder="user_id">
+      <button type="submit">Ver</button>
+    </form>
+    <pre id="historyResult" class="muted">—</pre>
+  </section>
+
+  <section class="full">
+    <h2>Generar datos</h2>
+    <button class="secondary" id="genUsers">Generar usuarios</button>
+    <button class="secondary" id="genInventory">Generar inventario</button>
+    <div id="genMsg" class="msg"></div>
+  </section>
+
+  <section class="full">
+    <h2>Registros recientes</h2>
+    <select id="recentEntity">
+      <option value="orders">orders</option><option value="users">users</option>
+      <option value="payments">payments</option><option value="notifications">notifications</option>
+    </select>
+    <button class="secondary" id="recentBtn">Cargar</button>
+    <pre id="recentResult" class="muted">—</pre>
+  </section>
+
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+
+async function refreshHealth() {
+  try {
+    const data = await api('/api/health');
+    const tbody = document.querySelector('#health tbody');
+    tbody.innerHTML = Object.entries(data).map(([k, v]) =>
+      `<tr><td><span class="dot ${v.up ? 'up' : 'down'}"></span>${k}-service</td>
+       <td class="muted">${v.up ? 'up' : 'down'}</td></tr>`).join('');
+  } catch (e) { /* keep last state on transient failure */ }
+}
+
+async function refreshResources() {
+  try {
+    const [res, disk] = await Promise.all([api('/api/resources'), api('/api/disk').catch(() => ({}))]);
+    const tbody = document.querySelector('#resources tbody');
+    tbody.innerHTML = Object.entries(res).map(([inst, v]) => {
+      const svc = inst.split('-')[0];
+      const d = disk[svc];
+      return `<tr><td>${inst}</td><td>${(v.cpu_cores ?? 0).toFixed(3)}</td><td>${v.mem_mib ?? '—'}</td><td>${d ?? '—'}</td></tr>`;
+    }).join('') || '<tr><td class="muted" colspan="4">sin datos (Prometheus vacío)</td></tr>';
+  } catch (e) {}
+}
+
+async function refreshKubernetes() {
+  const el = $('k8sStatus');
+  try {
+    const data = await api('/api/kubernetes');
+    el.textContent = '';
+    document.querySelector('#k8sPods tbody').innerHTML = data.pods.map(p =>
+      `<tr><td>${p.name}</td><td>${p.phase}</td>
+       <td><span class="dot ${p.ready ? 'up' : 'down'}"></span>${p.ready}</td>
+       <td>${p.restarts}</td></tr>`).join('');
+    document.querySelector('#k8sHpa tbody').innerHTML = data.hpas.map(h =>
+      `<tr><td>${h.name}</td><td>${h.currentReplicas ?? '—'}/${h.minReplicas}-${h.maxReplicas}</td>
+       <td>${h.currentCPU ?? '—'}% / ${h.targetCPU ?? '—'}%</td></tr>`).join('');
+  } catch (e) { el.textContent = 'cluster no disponible: ' + e.message; }
+}
+
+async function initGrafana() {
+  try {
+    const cfg = await api('/api/config');
+    $('grafanaFrame').src = cfg.grafana_url + '/d/resilencia-overview/resilencia-overview?orgId=1&kiosk&refresh=10s&theme=dark';
+  } catch (e) {}
+}
+initGrafana();
+
+async function refreshCB() {
+  try {
+    const d = await api('/api/circuit-breaker');
+    $('cb').innerHTML = `<span class="badge ${d.state}">${d.state}</span>
+      <span class="muted">failures: ${d.failures}/${d.failure_threshold} · recovery: ${d.recovery_timeout}s</span>`;
+  } catch (e) { $('cb').innerHTML = '<span class="muted">no disponible</span>'; }
+}
+
+async function refreshCounts() {
+  try {
+    const data = await api('/api/counts');
+    document.querySelector('#counts tbody').innerHTML = Object.entries(data).map(([k, v]) =>
+      `<tr><td>${k}-service</td><td>${v ?? '—'}</td></tr>`).join('');
+  } catch (e) {}
+}
+
+function tick() { refreshHealth(); refreshResources(); refreshCB(); refreshCounts(); refreshKubernetes(); }
+tick();
+setInterval(tick, 5000);
+
+$('chaosForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { service: $('chaosService').value };
+  if ($('failureRate').value !== '') body.FAILURE_RATE = parseFloat($('failureRate').value);
+  if ($('latencyMs').value !== '') body.LATENCY_MS = parseInt($('latencyMs').value);
+  if ($('timeoutRate').value !== '') body.TIMEOUT_RATE = parseFloat($('timeoutRate').value);
+  try {
+    const r = await api('/api/chaos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('chaosMsg').className = 'msg ok'; $('chaosMsg').textContent = JSON.stringify(r.config);
+  } catch (err) { $('chaosMsg').className = 'msg err'; $('chaosMsg').textContent = err.message; }
+});
+
+$('chaosResetAll').addEventListener('click', async () => {
+  for (const svc of ['order', 'user', 'inventory', 'payment', 'notification']) {
+    await api('/api/chaos', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service: svc, FAILURE_RATE: 0.0, LATENCY_MS: 0, TIMEOUT_RATE: 0.0 }) }).catch(() => {});
+  }
+  $('chaosMsg').className = 'msg ok'; $('chaosMsg').textContent = 'Chaos reseteado en los 5 servicios.';
+});
+
+$('orderForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('/api/orders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: parseInt($('orderUser').value), product_id: parseInt($('orderProduct').value), quantity: parseInt($('orderQty').value) })
+    });
+    $('orderMsg').className = 'msg ' + (r.status === 'success' ? 'ok' : 'err');
+    $('orderMsg').textContent = 'status: ' + r.status + (r.message ? ' — ' + r.message : '');
+    $('orderResult').textContent = JSON.stringify(r, null, 2);
+    tick();
+  } catch (err) { $('orderMsg').className = 'msg err'; $('orderMsg').textContent = err.message; }
+});
+
+$('historyForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('/api/users/' + $('historyUser').value + '/orders?limit=10');
+    $('historyResult').textContent = JSON.stringify(r, null, 2);
+  } catch (err) { $('historyResult').textContent = 'Error: ' + err.message; }
+});
+
+$('genUsers').addEventListener('click', async () => {
+  try { const r = await api('/api/generate/users', { method: 'POST' }); $('genMsg').className = 'msg ok'; $('genMsg').textContent = JSON.stringify(r); }
+  catch (err) { $('genMsg').className = 'msg err'; $('genMsg').textContent = err.message; }
+});
+$('genInventory').addEventListener('click', async () => {
+  try { const r = await api('/api/generate/inventory', { method: 'POST' }); $('genMsg').className = 'msg ok'; $('genMsg').textContent = JSON.stringify(r); }
+  catch (err) { $('genMsg').className = 'msg err'; $('genMsg').textContent = err.message; }
+});
+
+$('recentBtn').addEventListener('click', async () => {
+  try { const r = await api('/api/recent/' + $('recentEntity').value + '?limit=10'); $('recentResult').textContent = JSON.stringify(r, null, 2); }
+  catch (err) { $('recentResult').textContent = 'Error: ' + err.message; }
+});
+</script>
+</body>
+</html>

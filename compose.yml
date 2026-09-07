@@ -204,6 +204,10 @@ services:
       - "${GRAFANA_PORT:-3001}:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -217,6 +221,34 @@ services:
     ports:
       - "${JAEGER_PORT:-16687}:16686"   # UI
       - "${JAEGER_GRPC_PORT:-14251}:14250"   # Legacy gRPC
+    networks: [app-net]
+
+  # -- Control panel (Phase 12) -----------------------------------------
+
+  control-panel:
+    build: ./services/control-panel
+    ports:
+      - "${CONTROL_PANEL_PORT:-8105}:8000"
+    environment:
+      ORDER_SERVICE_URL: http://order-service:8000
+      USER_SERVICE_URL: http://user-service:8000
+      INVENTORY_SERVICE_URL: http://inventory-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+      NOTIFICATION_SERVICE_URL: http://notification-service:8000
+      PROMETHEUS_URL: http://prometheus:9090
+      GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3001}
+      K8S_API_SERVER: https://host.docker.internal:${K8S_API_PORT:-51311}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - C:\Users\vlaweirna\.minikube\ca.crt:/kube/ca.crt:ro
+      - C:\Users\vlaweirna\.minikube\profiles\minikube\client.crt:/kube/client.crt:ro
+      - C:\Users\vlaweirna\.minikube\profiles\minikube\client.key:/kube/client.key:ro
+    depends_on:
+      - order-service
+      - user-service
+      - inventory-service
+      - payment-service
+      - notification-service
     networks: [app-net]
 
 # Shared bridge network for local service-to-service communication.
