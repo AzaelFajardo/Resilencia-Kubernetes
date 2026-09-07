@@ -193,6 +193,79 @@ setting it and recreating the affected containers (`docker compose up -d
 OTel instrumentation on vs. off. See `docs/tests/resources-observability-results.md`
 for the measured overhead (+35-42% median/p95 latency in this stack).
 
+## Targeting `cli.py` at the Kubernetes cluster instead of Compose (Phase 6+)
+
+`cli.py` resolves every service URL from `http://{CLI_HOST}:{<SERVICE>_PORT}`
+(env vars, defaulting to the Compose host ports in `.env.example`) — no code
+change is needed to point it at a Kubernetes cluster instead. In Kubernetes,
+Services are ClusterIP-only (no host port), so `kubectl port-forward` each
+one to a free local port and pass those as env var overrides on invocation.
+Using a `+10000` offset from the Compose defaults keeps both stacks reachable
+side by side without a port clash, which matters for Phase 7 (same faults
+run against both environments for comparison):
+
+```bash
+# One-time, per service, kept running in the background:
+kubectl port-forward svc/order-service        18100:8000 &
+kubectl port-forward svc/user-service         18101:8000 &
+kubectl port-forward svc/inventory-service    18102:8000 &
+kubectl port-forward svc/payment-service      18103:8000 &
+kubectl port-forward svc/notification-service 18104:8000 &
+
+# Then any cli.py command, pointed at the cluster instead of Compose:
+ORDER_SERVICE_PORT=18100 USER_SERVICE_PORT=18101 \
+INVENTORY_SERVICE_PORT=18102 PAYMENT_SERVICE_PORT=18103 \
+NOTIFICATION_SERVICE_PORT=18104 \
+  python cli.py chaos set payment-service --failure-rate 1.0 --yes
+```
+
+Verified working end to end against the Phase 6 cluster: `status`,
+`chaos set`/`reset` (both `--failure-rate` and `--latency-ms`), and
+`circuit-breaker status` all behave identically to the Compose invocation —
+same JSON shapes, same effect on a subsequent `POST /orders`. The
+Kubernetes `db-configmap.yaml` seed is the small hand-written dataset (3
+users/3 products, not the 50k-user Faker seed — there's no `data-seeder`
+equivalent in `k8s/base/` yet), so the same product-1 stock-bump caveat
+from Phase 1 applies (`kubectl exec` into the `postgres` pod instead of
+`docker compose exec`).
+
+`kubectl port-forward` is fine for chaos control and single requests, but
+is itself a throughput bottleneck under a real load test (confirmed during
+Phase 6's HPA validation — see `docs/tests/kubernetes-results.md`).
+Load-generating faults (CPU saturation) against the cluster inherit that
+caveat; treat absolute latency numbers from a port-forwarded load test as
+directional, not a clean apples-to-apples comparison with Compose's numbers.
+
+## Grafana dashboard (Phase 8)
+
+`observability/grafana/dashboards/resilencia-overview.json` has 12 panels
+across the proposal's 4 metric sectors (Performance, Resilience, Resources,
+Observability), all backed by metrics the services already expose via
+`prometheus_client` on `/metrics` (`http_request_duration_seconds`,
+`http_requests_total`, `process_cpu_seconds_total`,
+`process_resident_memory_bytes`, `circuit_breaker_state`) - no new
+instrumentation was added.
+
+**Gotcha found while building it, fix now permanent:**
+`observability/grafana/provisioning/datasources/prometheus.yml` didn't pin
+an explicit `uid:` on the Prometheus datasource, so Grafana auto-generates
+a random one on first provisioning (e.g. `PBFA97CFB590B2093`). Every panel
+in the dashboard JSON hardcodes `"datasource": {"uid": "prometheus"}` -
+without the pin, that never matches, and **every panel silently shows "No
+data"**, including the two pre-Phase-8 panels that always existed. Fixed by
+adding `uid: prometheus` to the datasource provisioning file. If the
+`grafana-data` Docker volume is ever wiped and this pin is somehow removed
+again, this is the first thing to check.
+
+The OTel *metrics* pipeline (`otel-collector.yaml`'s `metrics` pipeline,
+exporting to `:8889`) is wired but always empty - every service's
+`tracing.py` only sends traces, never OTel metrics. Don't confuse it with
+the Prometheus scrape of each service's own `:8000/metrics`, which is what
+every dashboard panel actually reads.
+
+See `docs/RESULTS.md` for the consolidated analysis this dashboard feeds
+into.
+
 ## Process notes (things that would otherwise be re-discovered the hard way)
 
 - **Seed stock is small on purpose** (`db/init.sql` gives product 1 only

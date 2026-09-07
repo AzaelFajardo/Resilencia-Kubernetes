@@ -3,6 +3,12 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    # Pinned so every dashboard panel's datasource.uid: "prometheus" reference
+    # resolves correctly. Without this, Grafana auto-generates a random UID
+    # on first provisioning and every panel in resilencia-overview.json shows
+    # "No data" even though Prometheus itself has the data (discovered while
+    # building the Phase 8 dashboard - see docs/RESULTS.md).
+    uid: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true

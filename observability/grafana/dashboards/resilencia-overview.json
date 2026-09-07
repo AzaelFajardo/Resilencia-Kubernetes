@@ -9,51 +9,181 @@
   "links": [],
   "panels": [
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 10,
+      "panels": [],
+      "title": "Performance (latency p50/p95/p99, throughput)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never"
           },
+          "mappings": [],
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 11,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "pluginVersion": "10.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{handler=\"/orders\"}[1m])) by (le))",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler=\"/orders\"}[1m])) by (le))",
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{handler=\"/orders\"}[1m])) by (le))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "order-service POST /orders latency (p50/p95/p99)",
+      "description": "Server-side latency from order-service's own histogram. Prometheus's default buckets (0.1/0.5/1.0s) are coarse for a precise quantile at low request volume - cross-check against k6's client-side percentiles in docs/tests/*-results.md for the numbers that matter in the report.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never",
+            "stacking": { "mode": "normal" }
+          },
+          "mappings": [],
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 12,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "10.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(http_requests_total{handler=\"/orders\"}[1m])) by (status)",
+          "legendFormat": "HTTP {{status}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "order-service throughput (req/s by HTTP status)",
+      "description": "HTTP status only - order-service returns 200 for business failures too (declined payment, out of stock, fraud hold), so this panel cannot show the real error rate. Business-level success/failure is measured by k6's 'order succeeded' check in every docs/tests/*-results.md - not visible here.",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 13,
+      "panels": [],
+      "title": "Resilience (circuit breaker, target health, MTTR context)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "always"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "CLOSED", "color": "green" },
+                "1": { "text": "HALF_OPEN", "color": "yellow" },
+                "2": { "text": "OPEN", "color": "red" }
+              }
+            }
+          ],
+          "max": 2,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "id": 14,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "pluginVersion": "10.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "circuit_breaker_state",
+          "legendFormat": "order-service -> payment-service",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Circuit breaker state (0=CLOSED, 1=HALF_OPEN, 2=OPEN)",
+      "description": "Live view of the AsyncCircuitBreaker in order-service/main.py. See docs/tests/circuit-breaker-results.md for the full state-timeline analysis and the Phase 4 concurrency fix.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
+              { "color": "red", "value": null },
+              { "color": "green", "value": 5 }
             ]
           }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 0
-      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
       "id": 1,
       "options": {
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "value"
       },
       "pluginVersion": "10.4.2",
@@ -66,19 +196,105 @@
           "refId": "A"
         }
       ],
-      "title": "Healthy Targets",
+      "title": "Healthy Targets (out of 6: 5 microservices + otel-collector)",
+      "description": "Docker Compose has no self-healing (see docs/tests/fault-pod-container-kill-results.md) - a dip here that never recovers on its own is expected in Compose and a bug if it happens in Kubernetes.",
       "type": "stat"
     },
     {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 16,
+      "panels": [],
+      "title": "Resources (CPU, memory per service)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never"
           },
+          "mappings": [],
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "id": 17,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "10.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "rate(process_cpu_seconds_total{job=\"microservices\"}[1m])",
+          "legendFormat": "{{instance}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Per-service CPU usage (cores)",
+      "description": "Process-level CPU from each service's own /metrics (prometheus_client's default ProcessCollector) - a live Prometheus-native complement to Phase 5's docker-stats CSV sampling (docs/tests/resources-observability-results.md). Expect order-service to dominate under load - it's the documented CPU bottleneck (4 downstream calls + DB write per order).",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
+          "mappings": [],
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "id": 18,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "pluginVersion": "10.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "process_resident_memory_bytes{job=\"microservices\"}",
+          "legendFormat": "{{instance}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Per-service resident memory",
+      "description": "RSS per service process. Phase 5 measured order-service tripling (72->319 MiB) under 200-VU load via docker stats - this panel shows the same signal live, from inside the process instead of the container cgroup.",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 19,
+      "panels": [],
+      "title": "Observability (scrape health, OTel/tracing caveats)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "linear",
@@ -90,50 +306,46 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
             ]
           }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 0
-      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
       "id": 2,
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
       },
       "pluginVersion": "10.4.2",
       "targets": [
         {
           "editorMode": "code",
           "expr": "up{job=~\"microservices|otel-collector\"}",
-          "legendFormat": "{{job}}",
+          "legendFormat": "{{job}} {{instance}}",
           "range": true,
           "refId": "A"
         }
       ],
       "title": "Prometheus Target Up Status",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 21,
+      "options": {
+        "code": { "language": "plaintext", "showLineNumbers": false, "showMiniMap": false },
+        "content": "### Observability caveats (read before trusting this row)\n\n- **The OTel *metrics* pipeline is wired but empty.** `observability/otel-collector.yaml` has a full `metrics` pipeline (OTLP receiver -> Prometheus exporter on :8889), but every service's `tracing.py` only ever sends **traces**, never OTel metrics - so `:8889/metrics` returns nothing. The panels above use each service's own `prometheus_client` HTTP endpoint (:8000/metrics) instead, which is unrelated to this unused pipeline.\n- **Traces live in Jaeger, not here.** Open http://localhost:16687 (or `JAEGER_PORT` from `.env`) for the actual trace view and per-service span counts - there's no Jaeger datasource provisioned in this Grafana, by design (this dashboard is Prometheus-only).\n- **OTel instrumentation overhead** (+35-42% median/p95 latency) and the **span-loss check** (none detected at ~21-43 req/s peak, but not a strong proof at higher throughput) were both measured directly against Jaeger/k6, not through Grafana - see `docs/tests/resources-observability-results.md` for the full numbers and caveats.\n- **Sampling impact was never measured** - `OTEL_TRACES_SAMPLER` support doesn't exist in `tracing.py` yet (documented as optional future work, not a bug)."
+      },
+      "pluginVersion": "10.4.2",
+      "title": "Notes",
+      "type": "text"
     }
   ],
-  "refresh": "30s",
+  "refresh": "10s",
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
@@ -151,6 +363,6 @@
   "timezone": "browser",
   "title": "Resilencia Overview",
   "uid": "resilencia-overview",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

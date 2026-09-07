@@ -237,8 +237,8 @@ Prometheus:
 
 Grafana:
 
-- El datasource `Prometheus` queda aprovisionado automaticamente con URL `http://prometheus:9090`.
-- Se incluye un dashboard base llamado `Resilencia Overview`.
+- El datasource `Prometheus` queda aprovisionado automaticamente con URL `http://prometheus:9090` (uid fijo: `prometheus`).
+- Dashboard `Resilencia Overview`: 12 paneles cubriendo los 4 sectores de la propuesta (Desempeno, Resiliencia, Recursos, Observabilidad). Ver `docs/RESULTS.md` para el analisis consolidado y capturas.
 
 Jaeger:
 
@@ -330,6 +330,29 @@ Para caos:
 - `with-retries.js` y `with-circuit-breaker.js` ya usan `FAILURE_RATE` en mayusculas.
 - Los scripts estan pensados para correr dentro de la red Docker, no contra `localhost` desde el contenedor.
 
+## Kubernetes (Fase 6+)
+
+El stack tambien corre en un cluster de Kubernetes (probado con minikube,
+driver Docker). Requiere `kubectl` (incluido con Docker Desktop en Windows) y
+`minikube` (`winget install -e --id Kubernetes.minikube`):
+
+```powershell
+minikube start --driver=docker
+minikube addons enable metrics-server
+foreach ($svc in "user-service","inventory-service","payment-service","notification-service","order-service") {
+  docker build -t "${svc}:latest" ".\services\$svc"
+  minikube image load "${svc}:latest"
+}
+kubectl apply -f k8s/base/
+kubectl apply -f k8s/resilience/hpa.yaml
+```
+
+Los 5 microservicios tienen liveness/readiness probes; `order-service-hpa` y
+`payment-service-hpa` autoescalan (min 1 / max 5 replicas, 70% CPU). Para usar
+`cli.py` contra el cluster en vez de Compose, ver "Targeting `cli.py` at the
+Kubernetes cluster" en `docs/TOOLING.md`. Resultados completos (HPA, MTTR,
+hallazgos) en `docs/tests/kubernetes-results.md` y `docs/tests/fault-*-results.md`.
+
 ## Configuracion de la base de datos
 
 Todos los microservicios y el seeder leen la variable `DATABASE_URL`. Por defecto apuntan al contenedor `postgres` de Compose:
@@ -351,6 +374,7 @@ El esquema (`db/init.sql`) usa tipos especificos de PostgreSQL (JSONB, enums y p
 - `docs/00. setup.md`
 - `docs/01.Arquitectura.md`
 - `docs/services/*.md`
-- `docs/tests/`
-- `docs/TOOLING.md` — how `cli.py`, chaos, circuit breaker, k6 and JMeter work
-- `docs/ACTION-PLAN.md` — phased plan and progress
+- `docs/tests/` — un resultado por fase/fault, mas capturas del dashboard en `docs/tests/screenshots/`
+- `docs/TOOLING.md` — how `cli.py`, chaos, circuit breaker, k6, JMeter and Kubernetes targeting work
+- `docs/ACTION-PLAN.md` — phased plan and progress (Fases 0-8 completadas)
+- `docs/RESULTS.md` — documento maestro: los 4 hallazgos esperados de la propuesta, consolidados

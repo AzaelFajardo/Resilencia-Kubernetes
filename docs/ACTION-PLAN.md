@@ -64,11 +64,17 @@ test doesn't just measure inventory exhaustion, and adding a business-level
 success check to `scripts/k6/baseline.js` since `order-service` returns
 HTTP 200 for business failures too).
 
-**Exit criteria:** met. Results (first run / re-verification run): 258 / 271
-requests, 0% error rate both times, ~8.3–8.7 req/s, p50 97–133ms, p95
-213–276ms, p99 972ms–1.3s. Numbers vary run to run as expected for a load
-test; the shape (near-zero error rate, sub-300ms p95, all services traced)
-is stable and is the comparison point for Phases 3–4.
+**Exit criteria:** met. Results (first run 2026-09-04 / re-verification run
+2026-09-05, both fresh boots): 258 / 256 requests, 0% error rate both times,
+~8.2–8.3 req/s, p50 133–167ms, p95 276–403ms, p99 1.07–1.30s. Numbers vary
+run to run as expected for a load test; the shape (near-zero error rate,
+sub-500ms p95, all services traced) is stable and is the comparison point
+for Phases 3–4. (A Phase 0-5 audit on 2026-09-05 found this exit criteria
+line had previously cited different second-run numbers — 271 requests, p50
+97ms, p95 213ms, p99 972ms — that were never recorded in
+`docs/tests/baseline-results.md` or anywhere else in the repo. The
+re-verification run was repeated for real to close that gap; see
+`docs/tests/baseline-results.md` "Second run (re-verification)".)
 
 ## Phase 2 — Load-testing tooling (k6 + JMeter) (done)
 
@@ -245,11 +251,36 @@ treats as optional new work rather than a Phase 0-style bug fix; a
 concrete implementation note for whoever picks this up is in the results
 doc.
 
-## Phase 6 — Kubernetes deployment and resilience mechanisms
+## Phase 6 — Kubernetes deployment and resilience mechanisms (done)
 
 **Goal:** stand up the existing `k8s/base/` + `k8s/resilience/hpa.yaml`
 manifests on a local cluster and exercise Kubernetes-native resilience
 (HPA, liveness probes) — the proposal's fourth resilience configuration.
+
+**Status:** complete. Installed `minikube` (`kubectl` was already available
+via Docker Desktop), enabled the `metrics-server` addon (required for the
+HPA to read CPU%), built and loaded all 5 service images, and added
+liveness/readiness probes (`GET /health:8000`) to all 5 microservice
+Deployments in `k8s/base/deployment.yaml`. HPA validated empirically:
+`order-service-hpa` scaled 1 → 3 replicas under `stress-test.js` load
+(confirmed via the `SuccessfulRescale` Kubernetes event, CPU utilization
+peaking at 201% of the 70% target); `payment-service-hpa` correctly stayed
+at 1 replica (only reached 30% CPU — it's exercised second-hand through
+`order-service`, consistent with Phase 5's CPU-bottleneck finding).
+Pod-kill MTTR measured across three independent runs (11.55s, 26.50s,
+12.12s) - always a fully automatic replacement with no manual
+intervention, in the tens-of-seconds range. Two genuine Kubernetes-native
+findings surfaced
+and are documented as tuning notes rather than fixed in this phase (outside
+its stated scope of probes + HPA/MTTR validation): (1) 4 of 5 microservices
+restart exactly once on a cold cluster boot because `k8s/` has no
+Compose-equivalent `depends_on: condition: service_healthy` ordering
+against `postgres` — self-heals via `restartPolicy: Always` within
+~10-15s; (2) under the same CPU-saturation spike that triggered the HPA
+scale-out, `order-service`'s own liveness probe timed out
+(`timeoutSeconds: 3`) against its overloaded `/health` and killed+restarted
+that pod — a known liveness-probe-under-genuine-load gotcha, not a bug.
+Full detail, all timestamps and events: `docs/tests/kubernetes-results.md`.
 
 **Steps:**
 1. Install `minikube` and `kubectl` locally (deferred until this phase by
@@ -270,16 +301,46 @@ manifests on a local cluster and exercise Kubernetes-native resilience
 6. Validate liveness-probe recovery: `kubectl delete pod <payment-service pod>`
    and confirm Kubernetes reschedules it automatically; time the MTTR.
 
-**Files to change:** `k8s/base/deployment.yaml` (add probes),
-`docs/tests/kubernetes-results.md` (HPA scaling behavior + MTTR).
+**Files changed:** `k8s/base/deployment.yaml` (probes added to all 5
+microservices), `docs/tests/kubernetes-results.md` (HPA scaling behavior +
+MTTR, new file).
 
-**Exit criteria:** HPA scales `order-service`/`payment-service` under load;
-a manually deleted pod is replaced automatically and MTTR is measured.
+**Exit criteria:** met. HPA scales `order-service` under load (`payment-service`
+did not scale in this run since it was only exercised indirectly — see
+results doc); a manually deleted pod is replaced automatically and MTTR is
+measured (11.55s / 26.50s across two independent runs - see
+`docs/tests/kubernetes-results.md` "Re-verification").
 
-## Phase 7 — Full fault-injection suite
+## Phase 7 — Full fault-injection suite (done)
 
 **Goal:** systematically run the four fault types the proposal names, each
 tied to the metric sector it is meant to stress.
+
+**Status:** complete. All four faults executed and documented against both
+Compose and Kubernetes (CPU saturation reused the load tests already run
+in Phases 5-6 against both environments rather than repeating a third
+identical 4-minute run — everything else is new). Headline findings:
+pod/container kill has **unbounded MTTR in Compose (no `restart:` policy on
+any live service) vs. ~11-27s in Kubernetes** (11.55s and 26.50s across
+two runs, same order of magnitude) — the core resilience gap the
+proposal expects Kubernetes to close; artificial latency (500ms×2 on
+`inventory-service`) showed the injected delay landing almost exactly on
+the median in both environments, with Kubernetes carrying a wider tail
+from the `kubectl port-forward` tunnel used to reach it; dependency
+failure (`user-service` at 100%) turned out to be a clean fail-fast
+short-circuit rather than a multi-service cascade (`order-service` never
+calls inventory/payment/notification once user validation fails) and
+recovered instantly in both environments once chaos was reset (no
+circuit-breaker-style recovery delay, since `FAILURE_RATE` is a stateless
+per-request config read); CPU saturation confirmed the HPA genuinely
+scales `order-service` (1→3 replicas) but its raw numbers are not directly
+comparable to Compose's due to the 200m per-pod CPU cap and the
+port-forward tunnel, both called out explicitly rather than presented as a
+clean apples-to-apples result. Full detail in
+`docs/tests/fault-pod-container-kill-results.md`,
+`docs/tests/fault-artificial-latency-results.md`,
+`docs/tests/fault-dependency-failure-results.md`, and
+`docs/tests/fault-cpu-saturation-results.md`.
 
 | Fault | How | Primary metric |
 | --- | --- | --- |
@@ -293,16 +354,40 @@ mechanisms) and the Kubernetes cluster (Phase 6 mechanisms), recording the
 same four metric sectors each time so results are comparable across
 environments.
 
-**Files to add:** one `docs/tests/fault-<name>-results.md` per fault type.
+**Files added:** `docs/tests/fault-pod-container-kill-results.md`,
+`docs/tests/fault-artificial-latency-results.md`,
+`docs/tests/fault-dependency-failure-results.md`,
+`docs/tests/fault-cpu-saturation-results.md`.
 
-**Exit criteria:** all four faults executed and documented in both
+**Exit criteria:** met. All four faults executed and documented in both
 environments where applicable.
 
-## Phase 8 — Metrics consolidation and dashboards
+## Phase 8 — Metrics consolidation and dashboards (done)
 
 **Goal:** turn Phases 1–7's raw results into the dashboards and comparison
 the proposal expects ("los resultados finalmente se representaran en
 dashboards y graficas que se generen con grafana").
+
+**Status:** complete. Extended `resilencia-overview.json` from 2 basic
+panels to 12, covering all four metric sectors (Performance, Resilience,
+Resources, Observability), backed entirely by metrics that were already
+being exposed (each service's own `prometheus_client` `/metrics`, no new
+instrumentation needed). Found and fixed a real, previously-silent bug
+while building it: every panel (including the two pre-existing ones)
+showed "No data" because `observability/grafana/provisioning/datasources/prometheus.yml`
+never pinned an explicit datasource `uid`, so Grafana auto-generated a
+random one that didn't match the `"uid": "prometheus"` hardcoded in the
+dashboard JSON - fixed by pinning `uid: prometheus` in the provisioning
+file. Verified live: generated real traffic (a k6 run with latency chaos
+injected), confirmed every panel's PromQL against Prometheus directly, and
+screenshotted the populated dashboard via Playwright. Wrote
+`docs/RESULTS.md` synthesizing all four of the proposal's expected
+findings (retries' latency impact, circuit-breaker effectiveness,
+autoscaling benefits, OTel overhead) from the per-phase docs, plus a
+cross-sector summary table. Known gap, out of this phase's scope: the
+Kubernetes cluster's own Grafana has no dashboard/datasource provisioning
+at all (`k8s/base/deployment.yaml` mounts nothing for it) - the dashboard
+built here only runs against Compose.
 
 **Steps:**
 1. Extend `observability/grafana/dashboards/resilencia-overview.json` with
@@ -315,13 +400,16 @@ dashboards y graficas que se generen con grafana").
    proposal (impact of retries on latency, circuit-breaker effectiveness,
    autoscaling benefits under load, overhead of collecting metrics/traces).
 
-**Files to add/change:**
-`observability/grafana/dashboards/resilencia-overview.json`,
-`docs/RESULTS.md`.
+**Files changed:**
+`observability/grafana/dashboards/resilencia-overview.json` (2 -> 12
+panels), `observability/grafana/provisioning/datasources/prometheus.yml`
+(pinned `uid: prometheus` - bug fix), `docs/RESULTS.md` (new),
+`docs/tests/screenshots/resilencia-overview.png` and
+`resilencia-overview-observability.png` (new).
 
-**Exit criteria:** a single results document answering the proposal's four
-expected findings, backed by dashboard screenshots and the per-phase result
-docs.
+**Exit criteria:** met. `docs/RESULTS.md` answers the proposal's four
+expected findings, backed by two dashboard screenshots (captured live,
+during an active load test) and every per-phase result doc.
 
 ## Phase 9 — Team control interface (last, by design)
 
@@ -351,9 +439,12 @@ Applies across all phases, not a separate phase to "finish":
   `run.sh`/`run.ps1`). Keep working as new services/config are added.
 - **Kubernetes manifests:** `k8s/base/` + `k8s/resilience/` (Phase 6 adds
   probes; later phases may add more resilience manifests as needed).
-- **Deploy scripts:** `run.sh`/`run.ps1` for Compose; `kubectl apply -f`
-  sequences for Phase 6 (document the exact apply order once probes are
-  added).
+- **Deploy scripts:** `run.sh`/`run.ps1` for Compose; for Phase 6+:
+  `minikube start --driver=docker && minikube addons enable metrics-server`,
+  then build+`minikube image load` each service, then
+  `kubectl apply -f k8s/base/ && kubectl apply -f k8s/resilience/hpa.yaml`
+  (order between the two `apply` calls doesn't matter in practice — see
+  `docs/tests/kubernetes-results.md`).
 - **Public GitHub repo:** keep `1.PROPUESTA...pdf`, `2.CARTA...`,
   `4. Esquema de campos...`, `RESUMEN DE LA FASE 1...`, the `.docx` report,
   and any `.env` out of every commit (enforced by `.gitignore` as of

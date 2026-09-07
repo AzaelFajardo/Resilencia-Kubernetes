@@ -5,7 +5,13 @@ mechanisms enabled.
 
 # When It Was Run
 
-2026-09-04, local Docker Compose stack, fresh volumes.
+2026-09-04, local Docker Compose stack, fresh volumes (first run). Independently
+re-verified 2026-09-05 on a second fresh boot (`docker compose down -v` +
+`up -d --build`) — see "Second run (re-verification)" below. This closes a gap
+found during a Phase 0-5 audit: `docs/ACTION-PLAN.md` had claimed a second run
+with different numbers (271 requests, p50 97ms, p95 213ms, p99 972ms) that was
+never actually recorded anywhere in the repo. That claim has been corrected in
+`ACTION-PLAN.md` to match the real second run documented here.
 
 # Description
 
@@ -104,6 +110,45 @@ samples) are the numbers to trust and compare against in later phases.
 after the run: `order-service`, `user-service`, `inventory-service`,
 `payment-service`, `notification-service`. Distributed traces for the full
 order flow are confirmed to be flowing end to end.
+
+## Second run (re-verification)
+
+Repeated the exact same setup end to end on 2026-09-05: fresh boot
+(`docker compose down -v --remove-orphans && docker compose up -d --build
+--remove-orphans`), confirmed all 5 services healthy via `python cli.py
+status` (50000 seeded users, 3 products, 2 orders/payments/notifications),
+re-applied the product-1 stock bump (`UPDATE products SET quantity = 100000
+WHERE id = 1;` — reset by `down -v`, as noted below), and ran the same
+`docker run ... grafana/k6 run /scripts/baseline.js` invocation.
+
+| Metric | First run (09-04) | Second run (09-05) |
+| --- | --- | --- |
+| Iterations / requests | 258 | 256 |
+| Throughput | 8.32 req/s | 8.22 req/s |
+| Checks passed | 516/516 (100%) | 512/512 (100%) |
+| HTTP error rate | 0.00% | 0.00% |
+| Business error rate | 0.00% | 0.00% |
+| Latency p50 (med) | 133.36 ms | 167.08 ms |
+| Latency p90 | 242.15 ms | 270.10 ms |
+| Latency p95 | 276.42 ms | 402.69 ms |
+| Latency p99 | 1.30 s | 1.07 s |
+| Latency max | 1.31 s | 1.11 s |
+
+Cross-checks (second run): `order-service`'s own `/metrics` shows
+`http_requests_total{handler="/orders",status="2xx"}` = 256, matching k6's
+`http_reqs` exactly (0% HTTP-level errors server-side). Duration histogram
+(`http_request_duration_seconds_bucket{handler="/orders"}`): `le=0.1` →
+39/256 (15.2%), `le=0.5` → 247/256 (96.5%), `le=1.0` → 253/256 (98.8%),
+`le=+Inf` → 256/256. Prometheus `Status -> Targets` shows both
+`microservices` (all 5 instances) and `otel-collector` as `up`. Jaeger
+(`GET /api/services`) lists all 5 services.
+
+**Conclusion:** the second run reproduces the same shape as the first —
+near-zero error rate, sub-500ms p95, all services traced — confirming this
+is stable across independent fresh boots, not a one-off result. The exact
+figures differ run to run as expected for a load test (p95 276ms vs.
+403ms, p99 1.30s vs. 1.07s), both driven by the same cold-start tail
+described above for the first run.
 
 ## Notes for later phases
 
