@@ -1,0 +1,42 @@
+groups:
+  - name: resilencia-alerts
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"microservices|otel-collector"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is down"
+          description: "Prometheus has not scraped {{ $labels.instance }} ({{ $labels.job }}) successfully for 1m."
+
+      - alert: CircuitBreakerOpen
+        expr: circuit_breaker_state == 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker to {{ $labels.service }} is OPEN"
+          description: "order-service's circuit breaker to {{ $labels.service }} has been OPEN for over 1m - payment-service calls are being rejected fast instead of attempted."
+
+      - alert: HighOrderLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler="/orders"}[5m])) by (le)) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "order-service p95 latency above 1s"
+          description: "POST /orders p95 latency has been above 1s for 2m (current: {{ $value | humanizeDuration }}) - see docs/tests/resources-observability-results.md for what's normal at various load levels."
+
+      - alert: HighOrderErrorRate
+        expr: sum(rate(http_requests_total{handler="/orders",status=~"5.."}[5m])) / sum(rate(http_requests_total{handler="/orders"}[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "order-service 5xx rate above 5%"
+          description: >-
+            This only catches transport-level/unhandled-exception errors (HTTP 5xx).
+            order-service returns HTTP 200 for simulated business failures (declined
+            payment, out of stock, fraud hold) by design - those are NOT covered by
+            this alert. See docs/RESULTS.md "Performance" panel notes.

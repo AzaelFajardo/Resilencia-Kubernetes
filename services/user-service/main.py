@@ -19,7 +19,7 @@ import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import desc, func
-from database import engine, Base, get_db, User
+from database import engine, Base, get_db, User, Order
 
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -168,6 +168,18 @@ class RecentUserSummary(BaseModel):
     email: str
     first_name: str
     active: bool
+
+
+class OrderHistoryItem(BaseModel):
+    """One order in a customer's history, per the proposal's spec that
+    user-service owns 'el historial de pedidos' - read from the shared
+    `orders` table (order-service's own table) rather than duplicating it."""
+    id: int
+    product_id: int
+    quantity: int
+    total_price: float
+    status: str
+    created_at: str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -414,6 +426,35 @@ async def validate_user(user_id: int, request: Request, db: AsyncSession = Depen
         message="Customer exists but is inactive",
         customer=customer,
     )
+
+@app.get("/users/{user_id}/orders", response_model=List[OrderHistoryItem])
+async def get_user_orders(
+    user_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[OrderHistoryItem]:
+    """Order history for a customer (proposal spec: user-service owns
+    'validación y el historial de pedidos'). 404s if the customer doesn't
+    exist; an empty list is a valid response for a customer with no orders
+    yet, distinct from a 404."""
+    await apply_chaos()
+    await get_customer_or_404(user_id, db)
+    result = await db.execute(
+        select(Order).filter(Order.user_id == user_id).order_by(desc(Order.id)).limit(limit)
+    )
+    orders = result.scalars().all()
+    return [
+        OrderHistoryItem(
+            id=o.id,
+            product_id=o.product_id,
+            quantity=o.quantity,
+            total_price=float(o.total_price),
+            status=str(o.status),
+            created_at=o.created_at.isoformat(),
+        )
+        for o in orders
+    ]
+
 
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):

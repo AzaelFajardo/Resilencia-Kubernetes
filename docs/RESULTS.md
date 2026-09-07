@@ -175,31 +175,53 @@ measurement next.
 | **Resources** | order-service ~40ms CPU/order, the clear bottleneck | no change measured | reduced contention after the concurrency fix | HPA scales the bottleneck service (1->3 replicas) under real CPU saturation |
 | **Observability** | OTel adds +35-42% latency; no span loss at ~21-43 req/s | n/a | n/a | Grafana dashboard (Phase 8) now surfaces Performance/Resilience/Resources/Observability live; sampling impact still unmeasured |
 
+## Proposal-fidelity check (2026-09-07)
+
+Read the source proposal PDF directly (not just this repo's own
+`ACTION-PLAN.md` interpretation of it) and cross-checked every literal
+requirement against the live, running system. Everything else matched;
+one real gap found and fixed: the proposal specifies `user-service` owns
+"los datos del usuario, validación **y el historial de pedidos**" - no
+per-user order history endpoint existed anywhere (`user-service` only had
+CRUD + validation; `order-service` had no per-user filter either). Added
+`GET /users/{user_id}/orders` to `user-service`, reading the shared
+`orders` table directly (no network hop) - 404 for a nonexistent
+customer, `[]` for one with no orders, real history otherwise. Verified
+live in both Compose and Kubernetes; exposed via `cli.py users orders
+--user-id N`. See `docs/services/user-service.md`.
+
+One remaining literal deviation, not fixed (bigger change, functionally
+inconsequential): the proposal says "OpenTelemetry para las trazas y las
+métricas" - in this system OTel only carries traces; metrics come from a
+separate `prometheus_client` integration per service, scraped directly by
+Prometheus. The four metric sectors the proposal asks for are still fully
+measured (see the dashboard and every `docs/tests/*.md`), just not
+through OTel's own metrics pipeline specifically.
+
 ## What's still open
 
-- **Helm was never used**, despite being named in the original academic
-  proposal ("stack de observabilidad con Helm"). `k8s/base/` and
-  `k8s/resilience/` are plain YAML, deployed via `kubectl apply -f`
-  directly - a deliberate team decision (see `docs/00. setup.md`), not an
-  oversight, but it's an explicit proposal item that remains undone if
-  anyone checks against the original document.
-- **Prometheus alerting was never implemented.** `observability/prometheus.yml`
-  only has `scrape_configs` - no `rule_files` or alerting rules exist. This
-  was named in the same academic proposal item as the Grafana dashboards
-  (which Phase 8 did complete) but was never picked up separately in
-  `docs/ACTION-PLAN.md` - found during a Phases 0-8 audit as a gap that had
-  gone unnoticed because it fell between the academic proposal (which asks
-  for it) and the internal plan (which never mentioned it as a to-do).
-- **Sampling impact** (Phase 5, explicitly deferred - needs new
-  `tracing.py` work).
-- **Phase 2's JMeter plan** was authored but never executed end to end
-  (smoke test still pending for anyone who wants to trust its numbers).
-- **Kubernetes' Grafana has no provisioning at all** (`k8s/base/deployment.yaml`'s
-  `grafana` Deployment mounts no ConfigMap for dashboards/datasources) -
-  the dashboard extended in this phase only runs against the Compose
-  stack. Out of Phase 8's stated scope (it names `observability/grafana/dashboards/resilencia-overview.json`,
-  the file, not a Kubernetes rollout of it) but worth flagging for Phase 9
-  or beyond if live Kubernetes dashboards are ever wanted.
-- **Phase 9** (team control interface decision) is the only phase left in
-  `docs/ACTION-PLAN.md`, and is explicitly gated on this document existing
-  first.
+Closed by Phases 10-11 (kept here as a record, not because they're still
+open): Helm packaging (`charts/resilencia/`, real `helm install` verified),
+Prometheus alerting (`observability/alerts.yml`, `CircuitBreakerOpen`
+driven to a real `firing` state), OTel sampling
+(`OTEL_TRACES_SAMPLER`/`_ARG` in all 5 `tracing.py`, impact measured in
+`docs/tests/sampling-results.md`), the JMeter smoke test
+(`docs/tests/jmeter-results.md`, 215 requests run for real), and
+Kubernetes' Grafana provisioning (now mounted, plus two real bugs found
+while wiring it up - K8s Prometheus was never scraping the microservices,
+and Jaeger's K8s Service never exposed its OTLP port - both fixed, see
+`docs/tests/kubernetes-hardening-results.md`).
+
+Genuinely still open:
+
+- **HPA-at-`maxReplicas` alerting** was scoped out of Phase 11's alert
+  rules - it needs `kube-state-metrics` scraped into Prometheus (for
+  replica-count metrics), which isn't deployed. The other three alert
+  types (service down, circuit breaker open, high latency) don't need it.
+- **Phase 9's "skip" decision was reversed by Phase 12** (planned, not
+  started): a later audit found a real gap the skip decision missed - no
+  existing surface (`cli.py` or Grafana) can edit/delete records or show
+  per-service resource usage in one place, which a "team control
+  interface" needs for day-to-day administration, not just monitoring.
+  See `docs/ACTION-PLAN.md` Phase 12 for the full scope and design
+  instructions.

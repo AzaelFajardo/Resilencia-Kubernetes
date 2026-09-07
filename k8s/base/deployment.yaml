@@ -52,6 +52,10 @@ spec:
       labels:
         app: user-service
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: user-service
           image: user-service:latest
@@ -98,6 +102,10 @@ spec:
       labels:
         app: inventory-service
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: inventory-service
           image: inventory-service:latest
@@ -144,6 +152,10 @@ spec:
       labels:
         app: payment-service
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: payment-service
           image: payment-service:latest
@@ -197,6 +209,10 @@ spec:
       labels:
         app: notification-service
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: notification-service
           image: notification-service:latest
@@ -243,6 +259,10 @@ spec:
       labels:
         app: order-service
     spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
       containers:
         - name: order-service
           image: order-service:latest
@@ -281,16 +301,16 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
-            timeoutSeconds: 3
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
             initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 3
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 4
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -313,6 +333,14 @@ spec:
             - containerPort: 4317
             - containerPort: 4318
             - containerPort: 8889
+          volumeMounts:
+            - name: otel-collector-config
+              mountPath: /etc/otelcol-contrib/config.yaml
+              subPath: config.yaml
+      volumes:
+        - name: otel-collector-config
+          configMap:
+            name: otel-collector-config
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -333,6 +361,20 @@ spec:
           image: prom/prometheus:v2.51.2
           ports:
             - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: prometheus-alerts
+              mountPath: /etc/prometheus/alerts.yml
+              subPath: alerts.yml
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+        - name: prometheus-alerts
+          configMap:
+            name: prometheus-alerts
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -356,6 +398,23 @@ spec:
               value: "admin"
           ports:
             - containerPort: 3000
+          volumeMounts:
+            - name: datasource-provisioning
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboard-json
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: datasource-provisioning
+          configMap:
+            name: grafana-datasource
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboard-json
+          configMap:
+            name: grafana-dashboard-resilencia
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -380,3 +439,5 @@ spec:
           ports:
             - containerPort: 16686
             - containerPort: 14250
+            - containerPort: 4317
+            - containerPort: 4318

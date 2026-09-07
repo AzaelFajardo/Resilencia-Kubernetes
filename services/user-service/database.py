@@ -1,7 +1,7 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, Integer
+from sqlalchemy import Column, Integer, Numeric, String, Boolean, TIMESTAMP
 from sqlalchemy.dialects.postgresql import JSONB
 
 # Todos los servicios deben consumir la variable DATABASE_URL desde compose.yml
@@ -29,6 +29,23 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     data = Column(JSONB, nullable=False)
+
+
+class Order(Base):
+    """Read-only mapping onto order-service's `orders` table (same shared
+    Postgres instance) - lets user-service serve per-user order history
+    per the proposal's spec, without a network call to order-service."""
+
+    __tablename__ = "orders"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    product_id = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    total_price = Column(Numeric(12, 2), nullable=False)
+    status = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False)
 
 async def get_db():
     async with AsyncSessionLocal() as session:

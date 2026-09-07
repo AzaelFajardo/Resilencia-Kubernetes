@@ -1,0 +1,62 @@
+{{- range .Values.microservices }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
+      containers:
+        - name: {{ .name }}
+          image: "{{ .name }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- if .resources }}
+          resources:
+{{ toYaml .resources | indent 12 }}
+          {{- end }}
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://{{ $.Values.postgres.user }}:{{ $.Values.postgres.password }}@postgres:5432/{{ $.Values.postgres.db }}"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+            - name: FAILURE_RATE
+              value: "0.0"
+            - name: LATENCY_MS
+              value: "0"
+            {{- if .hasTimeoutRate }}
+            - name: TIMEOUT_RATE
+              value: "0.0"
+            {{- end }}
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+{{ toYaml $.Values.probes.readiness | indent 12 }}
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+{{ toYaml $.Values.probes.liveness | indent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+spec:
+  selector:
+    app: {{ .name }}
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+---
+{{- end }}

@@ -131,3 +131,7 @@ spec:
       protocol: TCP
       port: 14250
       targetPort: 14250
+    - name: otlp-grpc
+      protocol: TCP
+      port: 4317
+      targetPort: 4317

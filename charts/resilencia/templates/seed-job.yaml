@@ -1,0 +1,24 @@
+{{- if .Values.seed.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-seeder
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: data-seeder
+          image: "data-seeder:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@postgres:5432/{{ .Values.postgres.db }}"
+            - name: SEED_ENABLED
+              value: "true"
+            - name: SEED_USERS_COUNT
+              value: {{ .Values.seed.usersCount | quote }}
+            - name: SEED_PRODUCTS_COUNT
+              value: {{ .Values.seed.productsCount | quote }}
+{{- end }}

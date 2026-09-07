@@ -411,13 +411,23 @@ panels), `observability/grafana/provisioning/datasources/prometheus.yml`
 expected findings, backed by two dashboard screenshots (captured live,
 during an active load test) and every per-phase result doc.
 
-## Phase 9 — Team control interface (last, by design)
+## Phase 9 — Team control interface (last, by design) (done)
 
 **Goal:** only once Phases 1–8 prove the system, observability and
 experiments genuinely work, decide whether the team needs anything beyond
 `cli.py` for day-to-day demos or reporting.
 
-**Steps:**
+**Decision (2026-09-06): skip.** `cli.py` (status, seeding, ordering, chaos
+injection/reset, circuit-breaker introspection) plus the Grafana
+`Resilencia Overview` dashboard (Phase 8, 12 panels across all four metric
+sectors) plus `docs/RESULTS.md` (the written comparison) already cover
+every need that surfaced across Phases 0–8 — operating the stack, running
+demos, and reporting results. No gap requiring a new interface was found
+during any phase. Building one now would duplicate `cli.py` and the
+dashboard for no identified benefit. This closes the plan: Phases 0–9 are
+all complete.
+
+**Steps (historical, kept for context):**
 1. Review whether `cli.py` (Phase 0) is sufficient for the team's remaining
    needs (it already covers status, seeding, ordering, chaos, circuit
    breaker introspection).
@@ -430,6 +440,133 @@ experiments genuinely work, decide whether the team needs anything beyond
 
 **Exit criteria:** an explicit team decision (build/skip) recorded here or in
 a follow-up note, made only after Phase 8 is complete.
+
+## Phase 10 — Kubernetes hardening & parity with Compose (done)
+
+**Goal:** close every Kubernetes-side code gap found during the Phases
+0-9 audit so the cluster matches Compose's dependency-ordering,
+self-healing and tooling parity, on the way to a Helm-based delivery.
+
+**Status:** complete, all 5 items verified live. `initContainer` (wait for
+postgres) added to all 5 microservices - a full pod-sweep restart showed
+0/5 restarts (previously a guaranteed 1 each). `order-service` liveness
+probe retuned - re-ran the same 200-VU stress test that used to
+self-restart it: HPA scaled 1→3 again, 0 restarts this time. Grafana
+provisioning added for Kubernetes - and while verifying it, found **two
+real, previously undetected bugs**: K8s Prometheus was never scraping the
+microservices/otel-collector (no config was ever mounted - it only
+scraped itself), and K8s Jaeger's Service never exposed port 4317 so
+every trace export from otel-collector silently failed with a timeout.
+Both fixed and re-verified (5 Prometheus targets up, all 5 services
+visible in Jaeger). Added a Kubernetes Job mirroring Compose's
+`data-seeder` - confirmed 50,000 users seeded. Converted everything into a
+Helm chart (`charts/resilencia/`) - `helm lint` clean, and a real `helm
+install` into an isolated namespace brought up all 11 resources with 0
+restarts on the first try, order placement confirmed working, then torn
+down. Full detail: `docs/tests/kubernetes-hardening-results.md`.
+
+**Steps:**
+1. Add an `initContainer` (busybox polling `nc -z postgres 5432` or
+   equivalent) to all 5 microservice Deployments in
+   `k8s/base/deployment.yaml`, so they wait for `postgres` before the main
+   container starts. Fixes the documented cold-boot restart
+   (`docs/tests/kubernetes-results.md`). Verify with a fresh
+   `kubectl delete pod` sweep or cluster restart: zero restarts expected.
+2. Retune `order-service`'s liveness probe (`timeoutSeconds`/
+   `failureThreshold`) so it stops self-restarting under genuine CPU
+   saturation (documented finding, same doc). Re-run
+   `scripts/k6/stress-test.js` against the cluster and confirm no
+   self-inflicted restart this time.
+3. Add Grafana provisioning to Kubernetes (ConfigMaps for datasources +
+   the `resilencia-overview.json` dashboard, mounted like Compose does) so
+   the Phase 8 dashboard also works against the cluster, not just Compose.
+4. Add a Kubernetes Job for the 50k-user seed (mirrors Compose's
+   `data-seeder`) so the cluster isn't limited to the 3-user/3-product
+   `db-configmap.yaml` dataset.
+5. Convert `k8s/base/` + `k8s/resilience/` into a Helm chart
+   (`charts/resilencia/` or similar) with a `values.yaml` for ports,
+   replica counts, probe timings and resource limits - the proposal
+   explicitly names Helm and it was never used.
+
+**Files changed:** `k8s/base/deployment.yaml`, `k8s/base/service.yaml`
+(jaeger OTLP port fix), new `k8s/base/grafana-provisioning-configmap.yaml`,
+new `k8s/base/observability-config-configmap.yaml` (prometheus +
+otel-collector configs), new `k8s/base/seed-job.yaml`, new
+`charts/resilencia/` (Chart.yaml, values.yaml, templates/, files/), new
+`docs/tests/kubernetes-hardening-results.md`.
+
+**Exit criteria:** met. Helm install boots with zero cold-boot restarts
+(verified twice, live); Grafana dashboard renders with live data
+in-cluster; the seed Job populates 50k users; HPA and probes still work
+with no regression (re-ran Phase 6/7's exact stress test and pod-kill
+scenarios).
+
+## Phase 11 — Observability completeness & final validation (done)
+
+**Goal:** close the remaining observability code gaps (alerting, sampling),
+actually execute the one test tool that was authored but never run
+(JMeter), then run a full regression pass across every phase to confirm
+the whole system - Compose and the now-hardened Kubernetes cluster - still
+meets every previously documented result.
+
+**Status:** complete, all 4 items verified live. `observability/alerts.yml`
+added (`ServiceDown`, `CircuitBreakerOpen`, `HighOrderLatencyP95`,
+`HighOrderErrorRate`), wired via `rule_files` in both Compose and
+Kubernetes; `CircuitBreakerOpen` was driven to an actual `firing` state
+live (not just loaded/`ok`) by opening the real breaker and waiting out
+the `for: 1m` window - confirmed via `/api/v1/alerts`. HPA-at-`maxReplicas`
+was scoped out: it would need `kube-state-metrics` scraped into
+Prometheus, which isn't deployed, and adding it was judged out of scope
+for an alerting pass; noted as a further gap rather than silently
+dropped. `OTEL_TRACES_SAMPLER`/`OTEL_TRACES_SAMPLER_ARG` support added to
+all 5 `tracing.py` files (a `_build_sampler()` reading the standard OTel
+env vars, since this project constructs `TracerProvider` by hand and
+never inherited the SDK's automatic env-reading); measured at 10% vs.
+100%: span export volume tracked the ratio (147/1110 ≈ 13.2% of spans
+exported, close to the configured 10% given only 30 sampled traces), with
+a real-but-modest latency saving distinct from Phase 5's much larger
+`OTEL_SDK_DISABLED` effect (sampling still creates and instruments every
+span, it just doesn't export the dropped ones). JMeter installed (plain
+zip, not the winget package - its bundled-JDK MSI hangs on a UAC prompt in
+a non-interactive session) and `scripts/jmeter/baseline.jmx` actually run
+for the first time: 215 requests, 0% error, p50/p90/p95 closely matching
+k6's Phase 1 numbers (p99 differs - explained, not swept under the rug, in
+the results doc). Regression pass across both environments (Compose
+retries/circuit-breaker re-triggered live, Kubernetes pods/HPA/order-flow
+re-checked) found no regressions from Phase 10's changes. Full detail:
+`docs/tests/sampling-results.md`, `docs/tests/jmeter-results.md`; alert
+rules covered inline here and in `docs/RESULTS.md`.
+
+**Steps:**
+1. Add Prometheus alerting rules (`rule_files`) for signals already
+   scraped: high error rate, circuit breaker `OPEN`, high p95 latency, HPA
+   pinned at `maxReplicas`. The proposal names this explicitly; it was
+   never implemented.
+2. Add `OTEL_TRACES_SAMPLER`/`OTEL_TRACES_SAMPLER_ARG` support to
+   `services/*/tracing.py` (5 files) and measure the sampling-impact
+   comparison Phase 5 deliberately deferred, at 2-3 sampling ratios.
+3. Install JMeter and actually run `scripts/jmeter/baseline.jmx` headless
+   (`jmeter -n -t ... -l results.jtl`), comparing its numbers against k6's
+   Phase 1 baseline - the plan.jmx was authored in Phase 2 but never
+   smoke-tested end to end.
+4. Full regression: re-run Phase 1 baseline, Phase 3 retries, Phase 4
+   circuit breaker, and Phase 7's four faults against both environments
+   post-Phase-10-hardening; confirm no regressions and update any results
+   doc whose numbers meaningfully shifted.
+
+**Files changed:** `observability/alerts.yml` (new),
+`observability/prometheus.yml` (`rule_files` + `evaluation_interval: 15s`),
+`compose.yml` (mount `alerts.yml`, `OTEL_TRACES_SAMPLER`/`_ARG` on all 5
+microservices), `.env.example`, `k8s/base/observability-config-configmap.yaml`
+(+ `prometheus-alerts` ConfigMap), `k8s/base/deployment.yaml` (mount),
+`services/*/tracing.py` (5 files, sampler support), new
+`docs/tests/sampling-results.md`, new `docs/tests/jmeter-results.md`.
+
+**Exit criteria:** met. Alert rules load and one (`CircuitBreakerOpen`) was
+driven to a real `firing` state in both environments; sampling is
+configurable and its impact measured; JMeter has a real completed run
+comparable to k6's; the regression pass found no behavior changes from
+Phase 10.
 
 ## Reproducible delivery (cross-cutting, ongoing)
 

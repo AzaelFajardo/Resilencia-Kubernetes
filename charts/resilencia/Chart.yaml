@@ -1,0 +1,10 @@
+apiVersion: v2
+name: resilencia
+description: >
+  Resilencia-Kubernetes microservice stack (order/user/inventory/payment/
+  notification + postgres + OpenTelemetry/Prometheus/Grafana/Jaeger).
+  Phase 10: Helm packaging of the plain k8s/ manifests, requested by the
+  original academic proposal. Local/dev use only - see docs/00. setup.md.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

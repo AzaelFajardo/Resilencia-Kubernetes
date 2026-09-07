@@ -159,6 +159,12 @@ def cmd_users_recent(args: argparse.Namespace) -> int:
     return 0 if status == 200 else 1
 
 
+def cmd_users_orders(args: argparse.Namespace) -> int:
+    status, body = http_request("GET", f"{base_url('user')}/users/{args.user_id}/orders?limit={args.limit}")
+    print_json(body)
+    return 0 if status == 200 else 1
+
+
 # ── inventory ───────────────────────────────────────────────────────────
 
 def cmd_inventory_generate(_args: argparse.Namespace) -> int:
@@ -350,6 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = users_sub.add_parser("recent", help="List the most recently created users")
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(func=cmd_users_recent)
+    p = users_sub.add_parser("orders", help="Order history for a customer")
+    p.add_argument("--user-id", type=int, required=True)
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_users_orders)
 
     inventory = sub.add_parser("inventory", help="Inventory-service operations")
     inventory_sub = inventory.add_subparsers(dest="inventory_command", required=True)
