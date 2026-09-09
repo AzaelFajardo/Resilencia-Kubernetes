@@ -57,6 +57,10 @@ número fijo) y enviar peticiones de forma flexible desde la UI.
 
 **Goal:** cerrar los gaps de portabilidad y "solo lectura" del panel de K8s.
 
+**Estado (2026-09-09):** el paso 1 (portabilidad) ya está hecho — ver
+`docs/control-panel-limitations.md` §5. Quedan el paso 2 (acciones) y el
+paso 3 (verificación TLS).
+
 **Steps:**
 1. Quitar rutas/puertos hardcodeados (`C:\Users\vlaweirna\...`,
    `K8S_API_PORT=51311`) — leer el kubeconfig dinámicamente o exponerlo

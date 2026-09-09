@@ -58,17 +58,27 @@ confirmación por entidad en las tablas (la API ya existe).
   Grafana/alertas, hace falta `cadvisor` (o `node-exporter`) en Compose +
   Prometheus.
 
-## 5. Kubernetes — solo lectura y no portable
+## 5. Kubernetes — solo lectura, pero ya multiplataforma
 
 - ⚠️ `/api/kubernetes` lee pods + HPA del API server de minikube pero:
   - sin botones de acción (borrar pod, escalar, logs);
   - `verify=False` (cert emitido para hostname de minikube, no para
     `host.docker.internal`) — aceptable en cluster local de estudio;
-  - puerto del API server hardcodeado (`K8S_API_PORT` default 51311) —
-    minikube lo asigna dinámicamente en cada `start`;
-  - rutas de certs hardcodeadas a `C:\Users\vlaweirna\.minikube\...` en
-    `compose.yml` — específico de esta máquina;
   - solo namespace `default`.
+- ✅ (Fase I3, parcial) **Portabilidad resuelta**: la integración es opt-in
+  y funciona en Windows/macOS/Linux.
+  - `control-panel` ya no monta rutas Windows hardcodeadas: monta el
+    directorio `./k8s/certs/` (gitignored, vacío por defecto) en `/kube`.
+  - `K8S_API_SERVER` se lee de `.env` (vacío = panel desactivado; el panel
+    responde "Kubernetes not configured"). Antes estaba hardcodeado a
+    `https://host.docker.internal:${K8S_API_PORT:-51311}`.
+  - Se añadió `extra_hosts: host.docker.internal:host-gateway` para que
+    `host.docker.internal` resuelva también en Linux.
+  - Los certificados (`K8S_CA_FILE`, `K8S_CLIENT_CERT_FILE`,
+    `K8S_CLIENT_KEY_FILE`) son configurables por entorno.
+  - Pendiente: el puerto del API server de minikube sigue siendo dinámico
+    (se documenta en `.env.example` cómo obtenerlo), y falta leer el
+    kubeconfig automáticamente.
 
 ## 6. Grafana — embebido pero simplificado
 
@@ -112,7 +122,7 @@ confirmación por entidad en las tablas (la API ya existe).
 2. ✅ Proxies CRUD + UI (crear/editar/borrar por entidad) en el panel.
 3. ✅ Latencia por servicio + vista de alertas en el panel.
 4. Disco real vía cadvisor en Prometheus (hoy: aproximado vía socket Docker).
-5. Portabilidad de K8s (env vars en vez de hardcode a esta máquina).
+5. ✅ Portabilidad de K8s (env vars en vez de hardcode a esta máquina).
 6. Deployment del panel en K8s/Helm.
 7. Tests + reconexión del panel.
 8. Pase de diseño con las skills de mockups (`claude-design`,

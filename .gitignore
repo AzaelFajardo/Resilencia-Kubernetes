@@ -24,3 +24,10 @@ CLAUDE_Code.md
 # Local scratch / ideation notes
 IDEA.md
 .playwright-cli/
+
+# Project context document (generated, not part of the repo)
+contexto.md
+
+# Kubernetes client certificates (machine-specific, opt-in for the control panel)
+k8s/certs/*
+!k8s/certs/.gitkeep

@@ -229,6 +229,11 @@ services:
     build: ./services/control-panel
     ports:
       - "${CONTROL_PANEL_PORT:-8105}:8000"
+    # host.docker.internal resolves out of the box on Docker Desktop
+    # (Windows/macOS); this extra host makes it resolve on plain Linux too,
+    # so the optional Kubernetes panel works on every platform.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       ORDER_SERVICE_URL: http://order-service:8000
       USER_SERVICE_URL: http://user-service:8000
@@ -237,12 +242,20 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification-service:8000
       PROMETHEUS_URL: http://prometheus:9090
       GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3001}
-      K8S_API_SERVER: https://host.docker.internal:${K8S_API_PORT:-51311}
+      # Kubernetes panel is opt-in and platform-agnostic. Leave K8S_API_SERVER
+      # empty to disable it (the panel returns 503 "not configured"). To enable
+      # it, set K8S_API_SERVER (e.g. https://host.docker.internal:<minikube API
+      # port>) and drop the cluster client certs into ./k8s/certs/ (ca.crt,
+      # client.crt, client.key). See .env.example.
+      K8S_API_SERVER: ${K8S_API_SERVER:-}
+      K8S_CA_FILE: ${K8S_CA_FILE:-/kube/ca.crt}
+      K8S_CLIENT_CERT_FILE: ${K8S_CLIENT_CERT_FILE:-/kube/client.crt}
+      K8S_CLIENT_KEY_FILE: ${K8S_CLIENT_KEY_FILE:-/kube/client.key}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - C:\Users\vlaweirna\.minikube\ca.crt:/kube/ca.crt:ro
-      - C:\Users\vlaweirna\.minikube\profiles\minikube\client.crt:/kube/client.crt:ro
-      - C:\Users\vlaweirna\.minikube\profiles\minikube\client.key:/kube/client.key:ro
+      # Local, machine-specific Kubernetes client certificates. The directory
+      # ships empty (gitignored); it is safe to mount on every platform.
+      - ./k8s/certs:/kube:ro
     depends_on:
       - order-service
       - user-service

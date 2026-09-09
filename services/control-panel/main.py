@@ -34,8 +34,11 @@ SERVICES = {
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 GRAFANA_PUBLIC_URL = os.getenv("GRAFANA_PUBLIC_URL", "http://localhost:3001")
 K8S_API_SERVER = os.getenv("K8S_API_SERVER")
-K8S_CERT = ("/kube/client.crt", "/kube/client.key")
-K8S_CA = "/kube/ca.crt"
+K8S_CA = os.getenv("K8S_CA_FILE", "/kube/ca.crt")
+K8S_CERT = (
+    os.getenv("K8S_CLIENT_CERT_FILE", "/kube/client.crt"),
+    os.getenv("K8S_CLIENT_KEY_FILE", "/kube/client.key"),
+)
 
 try:
     import docker as docker_sdk
@@ -206,7 +209,7 @@ async def alerts():
         out = []
         for group in body.get("data", {}).get("groups", []):
             for rule in group.get("rules", []):
-                if rule.get("type") != "alert":
+                if rule.get("type") != "alerting":
                     continue
                 out.append({
                     "name": rule.get("name"),
