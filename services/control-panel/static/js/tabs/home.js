@@ -3,7 +3,7 @@
 
 import { API } from '../api.js';
 import { card, table, badge, dot, empty, esc, toast } from '../ui.js';
-import { createTimer } from '../refresh.js';
+import { mountRefreshControl } from '../interval.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
 const HOPS = ['user', 'inventory', 'payment', 'notification'];
@@ -79,7 +79,7 @@ export function render(view) {
     </div>`;
   }
 
-  const poll = createTimer(refresh);
+  const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
 
   $('f-run').addEventListener('click', runFlow);
@@ -226,5 +226,5 @@ export function render(view) {
     });
   }
 
-  return () => { poll(); clearInterval(autoTimer); clearTimeout(highlightTimer); animTimers.forEach(clearTimeout); };
+  return () => { refreshCleanup(); clearInterval(autoTimer); clearTimeout(highlightTimer); animTimers.forEach(clearTimeout); };
 }

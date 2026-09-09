@@ -3,7 +3,6 @@
 import { start, register } from './router.js';
 import { API } from './api.js';
 import { dot } from './ui.js';
-import { createTimer, refreshNow, setRefreshInterval, getIntervalSeconds } from './refresh.js';
 
 import * as home from './tabs/home.js';
 import * as orders from './tabs/orders.js';
@@ -29,17 +28,7 @@ register('kubernetes', kubernetes.render);
 
 start();
 refreshHealthStrip();
-const healthTimer = createTimer(refreshHealthStrip);
-
-// ---- Global auto-refresh control (header) ----
-const ri = document.getElementById('refreshInterval');
-ri.value = getIntervalSeconds();
-ri.addEventListener('change', () => {
-  setRefreshInterval(ri.value);
-  ri.value = getIntervalSeconds();
-  refreshNow();
-});
-document.getElementById('refreshNow').addEventListener('click', refreshNow);
+setInterval(refreshHealthStrip, 5000);
 
 async function refreshHealthStrip() {
   const el = document.getElementById('healthStrip');

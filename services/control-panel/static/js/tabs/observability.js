@@ -1,9 +1,10 @@
 // observability.js — Observabilidad: latencia, throughput, recursos, alertas,
-// objetivos de Prometheus y Grafana embebido.
+// objetivos de Prometheus y Grafana embebido. El refresco es controlable por
+// pestaña; el disco (lento, socket Docker) se actualiza aparte.
 
 import { API } from '../api.js';
 import { card, table, esc, fmt, badge, dot } from '../ui.js';
-import { createTimer } from '../refresh.js';
+import { mountRefreshControl } from '../interval.js';
 
 export function render(view) {
   view.innerHTML = `
@@ -17,7 +18,7 @@ export function render(view) {
         table(['Servicio', 'req/s', 'errores/s', 'tasa error (%)'], [])
           .replace('<tbody></tbody>', '<tbody id="o-tp"></tbody>'))}
       ${card('Recursos por servicio (CPU / RAM / Disco)',
-        'CPU en núcleos (rate de process_cpu_seconds_total), RAM residente en MiB (process_resident_memory_bytes) y escritura de disco acumulada en MiB (leída del socket de Docker, sin contador Prometheus).',
+        'CPU en núcleos (rate de process_cpu_seconds_total), RAM residente en MiB (process_resident_memory_bytes) y escritura de disco acumulada en MiB (leída del socket de Docker, sin contador Prometheus). El disco se actualiza aparte (~30 s) por ser una lectura lenta.',
         table(['Servicio', 'CPU (cores)', 'RAM (MiB)', 'Disco (MiB)'], [])
           .replace('<tbody></tbody>', '<tbody id="o-res"></tbody>'))}
       ${card('Objetivos de Prometheus (scrape)',
@@ -36,11 +37,15 @@ export function render(view) {
 
   const $ = (id) => view.querySelector('#' + id);
 
-  const t = createTimer(refresh);
+  let diskCache = {};
+
+  const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
+  refreshDisk();
+  const diskTimer = setInterval(refreshDisk, 30000);
   initGrafana();
 
-  const cleanup = () => t();
+  const cleanup = () => { refreshCleanup(); clearInterval(diskTimer); };
   return cleanup;
 
   async function refresh() {
@@ -59,10 +64,10 @@ export function render(view) {
     } catch (_) {}
 
     try {
-      const [res, disk] = await Promise.all([API.resources(), API.disk().catch(() => ({}))]);
+      const res = await API.resources();
       $('o-res').innerHTML = Object.entries(res).map(([inst, v]) => {
         const svc = inst.split('-')[0];
-        return `<tr><td>${esc(inst)}</td><td>${fmt(v.cpu_cores, 3)}</td><td>${fmt(v.mem_mib, 1)}</td><td>${disk[svc] ?? '—'}</td></tr>`;
+        return `<tr><td>${esc(inst)}</td><td>${fmt(v.cpu_cores, 3)}</td><td>${fmt(v.mem_mib, 1)}</td><td class="o-disk" data-svc="${esc(svc)}">${diskCache[svc] ?? '—'}</td></tr>`;
       }).join('') || `<tr><td colspan="4" class="muted">sin datos (Prometheus vacío)</td></tr>`;
     } catch (_) {}
 
@@ -86,6 +91,17 @@ export function render(view) {
           }).join('')
         : '<span class="muted">sin reglas de alerta cargadas</span>';
     } catch (_) { $('o-alerts').textContent = 'no disponible'; }
+  }
+
+  async function refreshDisk() {
+    try {
+      diskCache = await API.disk();
+    } catch (_) {
+      diskCache = {};
+    }
+    view.querySelectorAll('.o-disk').forEach((td) => {
+      td.textContent = diskCache[td.dataset.svc] ?? '—';
+    });
   }
 
   async function initGrafana() {

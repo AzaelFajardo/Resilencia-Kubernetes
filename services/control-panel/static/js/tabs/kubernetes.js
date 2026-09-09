@@ -2,7 +2,7 @@
 
 import { API } from '../api.js';
 import { card, table, esc, dot } from '../ui.js';
-import { createTimer } from '../refresh.js';
+import { mountRefreshControl } from '../interval.js';
 
 export function render(view) {
   view.innerHTML = `
@@ -16,18 +16,15 @@ export function render(view) {
         table(['HPA', 'Réplicas', 'CPU actual/objetivo'], [])
           .replace('<tbody></tbody>', '<tbody id="k-hpa"></tbody>'))}
     </div>
-    <div class="row">
-      <button class="btn secondary" id="k-refresh">Actualizar</button>
-      <span class="msg" id="k-status" style="flex:1"></span>
-    </div>
+    <div class="msg" id="k-status"></div>
   `;
 
   const $ = (id) => view.querySelector('#' + id);
-  const t = createTimer(refresh);
-  refresh();
-  $('k-refresh').addEventListener('click', refresh);
 
-  const cleanup = () => t();
+  const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 10 });
+  refresh();
+
+  const cleanup = () => refreshCleanup();
   return cleanup;
 
   async function refresh() {

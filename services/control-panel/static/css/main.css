@@ -55,7 +55,7 @@ body {
 .links a { color: var(--muted); text-decoration: none; margin-right: 14px; font-size: 12px; }
 .links a:hover { color: var(--accent); }
 
-.refresh-ctl { display: flex; align-items: center; gap: 6px; }
+.refresh-ctl { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .refresh-ctl .lbl { color: var(--muted); font-size: 11px; }
 .refresh-ctl input { width: 52px; padding: 4px 6px; }
 

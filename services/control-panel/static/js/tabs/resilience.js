@@ -3,7 +3,7 @@
 
 import { API } from '../api.js';
 import { card, badge, toast, esc, table } from '../ui.js';
-import { createTimer } from '../refresh.js';
+import { mountRefreshControl } from '../interval.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
 
@@ -100,9 +100,9 @@ export function render(view) {
   const $ = (id) => view.querySelector('#' + id);
 
   // ---- Circuit breaker (live) ----
-  const t = createTimer(refreshCB);
+  const refreshCleanup = mountRefreshControl(view, { onRefresh: refreshCB, initial: 3 });
   refreshCB();
-  const cleanup = () => t();
+  const cleanup = () => refreshCleanup();
 
   async function refreshCB() {
     try {
