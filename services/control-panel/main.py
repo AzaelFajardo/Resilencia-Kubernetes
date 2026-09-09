@@ -102,6 +102,53 @@ async def resources():
         return by_instance
 
 
+@app.get("/api/throughput")
+async def throughput():
+    """Per-service request rate (req/s) and 5xx error rate, from Prometheus."""
+    queries = {
+        "rps": 'sum by (instance) (rate(http_requests_total{job="microservices"}[1m]))',
+        "errors": 'sum by (instance) (rate(http_requests_total{job="microservices",status=~"5.."}[1m]))',
+    }
+    async with httpx.AsyncClient() as client:
+        results = {}
+        for name, q in queries.items():
+            r = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": q}, timeout=5.0)
+            body = r.json() if r.status_code == 200 else {}
+            results[name] = body.get("data", {}).get("result", [])
+
+        by_inst: dict[str, dict] = {}
+        for s in results["rps"]:
+            inst = s["metric"].get("instance", "?").split(":")[0]
+            by_inst.setdefault(inst, {})["rps"] = round(float(s["value"][1]), 2)
+        for s in results["errors"]:
+            inst = s["metric"].get("instance", "?").split(":")[0]
+            by_inst.setdefault(inst, {})["errors"] = round(float(s["value"][1]), 2)
+        for v in by_inst.values():
+            rps = v.get("rps", 0) or 0
+            errs = v.get("errors", 0) or 0
+            v["error_rate"] = round((errs / rps) * 100, 2) if rps else 0.0
+        return by_inst
+
+
+@app.get("/api/targets")
+async def targets():
+    """Prometheus scrape targets and their health (up/down)."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{PROMETHEUS_URL}/api/v1/targets", timeout=5.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="Prometheus unreachable")
+        data = r.json().get("data", {})
+        out = []
+        for t in data.get("activeTargets", []):
+            labels = t.get("labels", {})
+            out.append({
+                "job": labels.get("job", "?"),
+                "instance": labels.get("instance", "?"),
+                "health": t.get("health", "unknown"),
+            })
+        return {"targets": out}
+
+
 @app.get("/api/config")
 async def config():
     return {"grafana_url": GRAFANA_PUBLIC_URL, "k8s_available": bool(K8S_API_SERVER)}

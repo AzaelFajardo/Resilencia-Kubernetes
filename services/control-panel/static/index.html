@@ -17,6 +17,12 @@
     </div>
   </div>
   <div class="health" id="healthStrip" data-tip="Estado en vivo de los 5 microservicios (GET /health)"></div>
+  <div class="refresh-ctl">
+    <span class="lbl">refresco</span>
+    <input id="refreshInterval" type="number" min="1" step="1" value="5" data-tip="Intervalo de auto-refresco de métricas y gráficas, en segundos (mínimo 1).">
+    <span class="lbl">s</span>
+    <button id="refreshNow" class="btn sm secondary" data-tip="Actualizar todas las métricas ahora">⟳ Actualizar</button>
+  </div>
   <div class="links">
     <a href="http://localhost:3001" target="_blank" data-tip="Visualización de métricas (Grafana)">Grafana</a>
     <a href="http://localhost:16687" target="_blank" data-tip="Visualización de trazas distribuidas (Jaeger)">Jaeger</a>

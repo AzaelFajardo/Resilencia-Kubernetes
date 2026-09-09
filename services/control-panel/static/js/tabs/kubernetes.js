@@ -2,6 +2,7 @@
 
 import { API } from '../api.js';
 import { card, table, esc, dot } from '../ui.js';
+import { createTimer } from '../refresh.js';
 
 export function render(view) {
   view.innerHTML = `
@@ -15,19 +16,29 @@ export function render(view) {
         table(['HPA', 'Réplicas', 'CPU actual/objetivo'], [])
           .replace('<tbody></tbody>', '<tbody id="k-hpa"></tbody>'))}
     </div>
-    <div class="msg" id="k-status"></div>
+    <div class="row">
+      <button class="btn secondary" id="k-refresh">Actualizar</button>
+      <span class="msg" id="k-status" style="flex:1"></span>
+    </div>
   `;
 
+  const $ = (id) => view.querySelector('#' + id);
+  const t = createTimer(refresh);
   refresh();
+  $('k-refresh').addEventListener('click', refresh);
+
+  const cleanup = () => t();
+  return cleanup;
+
   async function refresh() {
-    const status = view.querySelector('#k-status');
+    const status = $('k-status');
     try {
       const data = await API.kubernetes();
       status.className = 'msg'; status.textContent = '';
-      view.querySelector('#k-pods').innerHTML = data.pods.map((p) =>
+      $('k-pods').innerHTML = data.pods.map((p) =>
         `<tr><td>${esc(p.name)}</td><td>${esc(p.phase)}</td><td>${dot(p.ready)}${p.ready}</td><td>${p.restarts}</td></tr>`
       ).join('') || `<tr><td colspan="4" class="muted">sin pods</td></tr>`;
-      view.querySelector('#k-hpa').innerHTML = data.hpas.map((h) =>
+      $('k-hpa').innerHTML = data.hpas.map((h) =>
         `<tr><td>${esc(h.name)}</td><td>${h.currentReplicas ?? '—'}/${h.minReplicas ?? '?'}-${h.maxReplicas ?? '?'}</td><td>${h.currentCPU ?? '—'}% / ${h.targetCPU ?? '—'}%</td></tr>`
       ).join('') || `<tr><td colspan="3" class="muted">sin HPAs</td></tr>`;
     } catch (e) {

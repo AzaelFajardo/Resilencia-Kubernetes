@@ -3,6 +3,7 @@
 
 import { API } from '../api.js';
 import { card, table, badge, dot, empty, esc, toast } from '../ui.js';
+import { createTimer } from '../refresh.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
 const HOPS = ['user', 'inventory', 'payment', 'notification'];
@@ -78,7 +79,7 @@ export function render(view) {
     </div>`;
   }
 
-  const poll = setInterval(refresh, 5000);
+  const poll = createTimer(refresh);
   refresh();
 
   $('f-run').addEventListener('click', runFlow);
@@ -225,5 +226,5 @@ export function render(view) {
     });
   }
 
-  return () => { clearInterval(poll); clearInterval(autoTimer); clearTimeout(highlightTimer); animTimers.forEach(clearTimeout); };
+  return () => { poll(); clearInterval(autoTimer); clearTimeout(highlightTimer); animTimers.forEach(clearTimeout); };
 }

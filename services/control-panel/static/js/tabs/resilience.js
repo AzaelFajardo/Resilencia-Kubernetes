@@ -3,6 +3,7 @@
 
 import { API } from '../api.js';
 import { card, badge, toast, esc, table } from '../ui.js';
+import { createTimer } from '../refresh.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
 
@@ -99,9 +100,9 @@ export function render(view) {
   const $ = (id) => view.querySelector('#' + id);
 
   // ---- Circuit breaker (live) ----
-  const t = setInterval(refreshCB, 3000);
+  const t = createTimer(refreshCB);
   refreshCB();
-  const cleanup = () => clearInterval(t);
+  const cleanup = () => t();
 
   async function refreshCB() {
     try {
