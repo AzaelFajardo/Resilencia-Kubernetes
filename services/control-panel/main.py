@@ -107,6 +107,33 @@ async def config():
     return {"grafana_url": GRAFANA_PUBLIC_URL, "k8s_available": bool(K8S_API_SERVER)}
 
 
+@app.post("/api/services/{service}/{action}")
+def service_action(service: str, action: str):
+    """Stop/start a microservice container for real (via the Docker socket).
+
+    Sync (not async) on purpose: the Docker SDK calls are blocking, so
+    FastAPI runs this endpoint in a worker thread instead of blocking the
+    event loop. Stopping a service is reflected across the whole stack
+    (health checks fail, the order flow short-circuits, etc.)."""
+    if service not in SERVICES:
+        raise HTTPException(status_code=400, detail=f"unknown service: {service}")
+    if action not in ("stop", "start"):
+        raise HTTPException(status_code=400, detail="action must be 'stop' or 'start'")
+    if _docker is None:
+        raise HTTPException(status_code=503, detail="Docker socket not available")
+
+    name = f"resilencia-kubernetes-{service}-service-1"
+    try:
+        c = _docker.containers.get(name)
+        if action == "stop":
+            c.stop()
+        else:
+            c.start()
+        return {"service": service, "action": action, "container": name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{name}: {e}")
+
+
 @app.get("/api/latency")
 async def latency():
     """Per-service latency percentiles (p50/p95/p99) from each service's own
@@ -130,10 +157,14 @@ async def latency():
 
 
 @app.get("/api/disk")
-async def disk():
+def disk():
     """Disk write bytes per service container, read from Docker's own
     blkio cgroup stats via the Docker socket (no Prometheus metric exists
-    for this - prometheus_client's ProcessCollector doesn't expose I/O)."""
+    for this - prometheus_client's ProcessCollector doesn't expose I/O).
+
+    Sync (not async) on purpose: the Docker SDK calls are blocking, so
+    FastAPI runs this endpoint in a worker thread instead of blocking the
+    event loop (which would stall every other /api/* request)."""
     if _docker is None:
         raise HTTPException(status_code=503, detail="Docker socket not available")
     out = {}

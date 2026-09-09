@@ -35,6 +35,7 @@ export const API = {
 
   chaosSet: (service, cfg) => post('/api/chaos', { service, ...cfg }),
   getChaos: (service) => api(`/api/chaos/${service}`),
+  serviceAction: (service, action) => post(`/api/services/${service}/${action}`),
   chaosSetAll: async (cfg) => {
     const svcs = ['order', 'user', 'inventory', 'payment', 'notification'];
     const out = [];

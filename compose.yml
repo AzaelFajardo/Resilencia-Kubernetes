@@ -252,7 +252,7 @@ services:
       K8S_CLIENT_CERT_FILE: ${K8S_CLIENT_CERT_FILE:-/kube/client.crt}
       K8S_CLIENT_KEY_FILE: ${K8S_CLIENT_KEY_FILE:-/kube/client.key}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
       # Local, machine-specific Kubernetes client certificates. The directory
       # ships empty (gitignored); it is safe to mount on every platform.
       - ./k8s/certs:/kube:ro
