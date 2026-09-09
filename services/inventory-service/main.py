@@ -18,8 +18,9 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func, update
+from sqlalchemy import desc, func, update, or_, text
 from database import engine, Base, get_db, Product as DBProduct
+import faker_utils
 
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -330,16 +331,44 @@ async def generate_inventory(db: AsyncSession = Depends(get_db)):
     return {"message": f"{count} products generated."}
 
 
+@app.post("/inventory/faker")
+async def generate_faker_products(
+    count: int = Query(10, ge=1, le=100000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generates `count` Faker products on demand (ids after the current max).
+    Used by the control panel for unlimited synthetic-data generation."""
+    await apply_chaos()
+    max_id = await db.scalar(select(func.max(DBProduct.id))) or 0
+    start = max_id + 1
+    rows = [
+        DBProduct(id=r["product_id"], quantity=r["quantity"], data=r)
+        for r in faker_utils.iter_product_records(count, start)
+    ]
+    db.add_all(rows)
+    await db.commit()
+    await db.execute(text("SELECT setval('products_id_seq', (SELECT MAX(id) FROM products));"))
+    await db.commit()
+    return {"message": f"{count} faker products generated", "start_id": start, "end_id": start + count - 1}
+
+
 @app.get("/inventory", response_model=List[Product])
 async def list_inventory(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id o nombre (parcial)"),
     db: AsyncSession = Depends(get_db),
 ) -> List[Product]:
     await apply_chaos()
-    result = await db.execute(
-        select(DBProduct).order_by(desc(DBProduct.id)).offset(offset).limit(limit)
-    )
+    stmt = select(DBProduct).order_by(desc(DBProduct.id))
+    if search:
+        q = f"%{search}%"
+        clauses = [DBProduct.data['name'].astext.ilike(q)]
+        if search.isdigit():
+            clauses.append(DBProduct.id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
     products = result.scalars().all()
     return [construct_product_model(product) for product in products]
 

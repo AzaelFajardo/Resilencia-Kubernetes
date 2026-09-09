@@ -18,8 +18,9 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_, text
 from database import engine, Base, get_db, User, Order
+import faker_utils
 
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -347,13 +348,25 @@ async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) ->
 async def list_users(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id, nombre o email (parcial)"),
     db: AsyncSession = Depends(get_db),
 ) -> List[Customer]:
-    """Lists customers, ordered by id ascending, with offset/limit pagination."""
+    """Lists customers, ordered by id ascending, with offset/limit pagination
+    and optional search by id, first_name, last_name or email."""
     await apply_chaos()
-    result = await db.execute(
-        select(User).order_by(User.id.asc()).offset(offset).limit(limit)
-    )
+    stmt = select(User).order_by(User.id.asc())
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            User.data['first_name'].astext.ilike(q),
+            User.data['last_name'].astext.ilike(q),
+            User.data['email'].astext.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(User.id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
     users = result.scalars().all()
     return [build_customer_model(u.data) for u in users]
 
@@ -397,6 +410,25 @@ async def generate_users(db: AsyncSession = Depends(get_db)):
             count += 1
     await db.commit()
     return {"message": f"{count} users generated."}
+
+
+@app.post("/users/faker")
+async def generate_faker_users(
+    count: int = Query(10, ge=1, le=100000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generates `count` Faker users on demand (idempotent-safe: assigns ids
+    starting after the current max). Used by the control panel for unlimited
+    synthetic-data generation."""
+    await apply_chaos()
+    max_id = await db.scalar(select(func.max(User.id))) or 0
+    start = max_id + 1
+    rows = [User(id=r["id"], data=r) for r in faker_utils.iter_user_records(count, start)]
+    db.add_all(rows)
+    await db.commit()
+    await db.execute(text("SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));"))
+    await db.commit()
+    return {"message": f"{count} faker users generated", "start_id": start, "end_id": start + count - 1}
 
 
 @app.get("/users/{user_id}", response_model=CustomerResponse)

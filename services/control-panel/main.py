@@ -15,6 +15,7 @@ the 5 microservices expose PUT/DELETE routes today, and adding them was
 out of scope for this pass. See README note in this service's directory.
 """
 import os
+import urllib.parse
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -296,23 +297,25 @@ async def _proxy_json(method: str, url: str, body=None, timeout: float = 15.0):
 
 
 @app.get("/api/entities/{entity}")
-async def list_entity(entity: str, offset: int = 0, limit: int = 20):
-    """Paginated list for an entity. Uses the new paginated GET endpoint on
-    services that have one (/payments, /notifications); falls back to the
-    service's existing list endpoint where one exists (/users, /inventory)."""
+async def list_entity(entity: str, offset: int = 0, limit: int = 20, search: str = ""):
+    """Paginated list for an entity, with optional search (id/name/status).
+    Uses the paginated+search GET endpoints added in the frontend refactor."""
     svc = _ENTITY_MAP.get(entity)
     if svc is None:
         raise HTTPException(status_code=404, detail="unknown entity")
+    qs = f"offset={offset}&limit={limit}"
+    if search:
+        qs += f"&search={urllib.parse.quote(search)}"
     if entity == "payments":
-        path = f"/payments?offset={offset}&limit={limit}"
+        path = f"/payments?{qs}"
     elif entity == "notifications":
-        path = f"/notifications?offset={offset}&limit={limit}"
+        path = f"/notifications?{qs}"
     elif entity == "users":
-        path = f"/users?offset={offset}&limit={limit}"
+        path = f"/users?{qs}"
     elif entity == "products":
-        path = f"/inventory?offset={offset}&limit={limit}"
+        path = f"/inventory?{qs}"
     else:  # orders
-        path = f"/orders/recent?limit={limit}"
+        path = f"/orders?{qs}"
     return await _proxy_json("GET", f"{SERVICES[svc]}{path}")
 
 
@@ -406,6 +409,66 @@ async def generate(what: str):
     svc, path = mapping[what]
     async with httpx.AsyncClient() as client:
         r = await client.post(f"{SERVICES[svc]}{path}", timeout=30.0)
+        return r.json()
+
+
+@app.post("/api/faker/{what}")
+async def generate_faker(what: str, count: int = 10):
+    """Generate `count` Faker records on demand (users or inventory)."""
+    mapping = {"users": ("user", "/users/faker"), "inventory": ("inventory", "/inventory/faker")}
+    if what not in mapping:
+        raise HTTPException(status_code=400, detail="must be 'users' or 'inventory'")
+    svc, path = mapping[what]
+    count = max(1, min(count, 100000))
+    async with httpx.AsyncClient() as client:
+        r = await client.post(f"{SERVICES[svc]}{path}?count={count}", timeout=180.0)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+
+
+class OrderGenerate(BaseModel):
+    count: int = 1
+    user_id: Optional[int] = None
+
+
+@app.post("/api/orders/generate")
+async def generate_orders(gen: OrderGenerate):
+    """Bulk-generate orders through the real flow (optionally for one user)."""
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SERVICES['order']}/orders/generate", json=gen.model_dump(), timeout=600.0
+        )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+
+
+class RetriesUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    count: Optional[int] = None
+    delay_ms: Optional[int] = None
+
+
+@app.get("/api/resilience/retries")
+async def get_retries():
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{SERVICES['order']}/resilience/retries", timeout=5.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="order-service unreachable")
+        return r.json()
+
+
+@app.post("/api/resilience/retries")
+async def set_retries(update: RetriesUpdate):
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SERVICES['order']}/resilience/retries",
+            json=update.model_dump(exclude_none=True),
+            timeout=5.0,
+        )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
 
 

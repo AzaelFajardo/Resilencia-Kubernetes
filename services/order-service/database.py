@@ -12,7 +12,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 
@@ -79,3 +79,28 @@ class Order(Base):
     return_policy_accepted = Column(Boolean, nullable=False, default=True, server_default=text("TRUE"))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()"))
+
+
+class User(Base):
+    """Read-only mapping onto user-service's `users` table (same shared Postgres
+    instance) - lets order-service pick active users when bulk-generating orders
+    without a network call to user-service."""
+
+    __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    data = Column(JSONB, nullable=False)
+
+
+class Product(Base):
+    """Read-only mapping onto inventory-service's `products` table (same shared
+    Postgres instance) - lets order-service pick in-stock products when
+    bulk-generating orders."""
+
+    __tablename__ = "products"
+    __table_args__ = {"extend_existing": True}
+
+    id = Column(Integer, primary_key=True, index=True)
+    quantity = Column(Integer, nullable=False)
+    data = Column(JSONB, nullable=False)

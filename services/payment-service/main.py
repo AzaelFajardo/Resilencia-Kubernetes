@@ -12,7 +12,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, PaymentRecord, engine, get_db
@@ -358,15 +358,23 @@ async def recent_payments(
 async def list_payments(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id de orden, estado o método"),
     db: AsyncSession = Depends(get_db),
 ) -> list[PaymentRecordSummary]:
     await apply_chaos_latency_and_timeout()
-    result = await db.execute(
-        select(PaymentRecord)
-        .order_by(PaymentRecord.id.asc())
-        .offset(offset)
-        .limit(limit)
-    )
+    stmt = select(PaymentRecord).order_by(PaymentRecord.id.asc())
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            PaymentRecord.status.ilike(q),
+            PaymentRecord.method.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(PaymentRecord.id == int(search))
+            clauses.append(PaymentRecord.order_id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
     records = result.scalars().all()
     return [serialize_payment_record(record) for record in records]
 

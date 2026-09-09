@@ -11,7 +11,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, NotificationRecord, engine, get_db
@@ -381,15 +381,24 @@ async def get_notification_by_order(
 async def list_notifications(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id de orden/usuario, estado o canal"),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationRecordSummary]:
     await apply_chaos_latency_and_timeout()
-    result = await db.execute(
-        select(NotificationRecord)
-        .order_by(NotificationRecord.id)
-        .offset(offset)
-        .limit(limit)
-    )
+    stmt = select(NotificationRecord).order_by(NotificationRecord.id)
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            NotificationRecord.status.ilike(q),
+            NotificationRecord.preferred_channel.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(NotificationRecord.id == int(search))
+            clauses.append(NotificationRecord.order_id == int(search))
+            clauses.append(NotificationRecord.user_id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
     records = result.scalars().all()
     return [serialize_notification_record(record) for record in records]
 

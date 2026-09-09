@@ -15,10 +15,10 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, or_, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Base, Order, OrderStatus, engine, get_db
+from database import Base, Order, OrderStatus, User, Product, engine, get_db
 from tracing import setup_tracing
 
 
@@ -101,6 +101,17 @@ class OrderRequest(BaseModel):
     quantity: int
 
 
+class OrderGenerateRequest(BaseModel):
+    count: int = 1
+    user_id: Optional[int] = None
+
+
+class RetriesConfig(BaseModel):
+    enabled: Optional[bool] = None
+    count: Optional[int] = None
+    delay_ms: Optional[int] = None
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -119,6 +130,7 @@ class OrderResponse(BaseModel):
     message: str
     order: OrderDetails
     downstream: dict
+    timings: dict = {}
 
 
 class CountResponse(BaseModel):
@@ -236,7 +248,12 @@ payment_cb = AsyncCircuitBreaker(
 )
 
 
-def build_metadata(request: Request) -> RequestMetadata:
+def build_metadata(request: Optional[Request]) -> RequestMetadata:
+    client_ip = "0.0.0.0"
+    user_agent = "unknown"
+    if request is not None:
+        client_ip = request.client.host if request.client else "0.0.0.0"
+        user_agent = request.headers.get("user-agent", "unknown")
     return RequestMetadata(
         trace_id=str(uuid.uuid4()),
         request_id=str(uuid.uuid4()),
@@ -245,13 +262,13 @@ def build_metadata(request: Request) -> RequestMetadata:
         environment="production",
         timestamp_utc=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         correlation_token=uuid.uuid4().hex,
-        client_ip=request.client.host if request.client else "0.0.0.0",
-        user_agent=request.headers.get("user-agent", "unknown"),
+        client_ip=client_ip,
+        user_agent=user_agent,
         tenant_id="TN-MX-001",
     )
 
 
-def build_security(request: Request) -> SecurityContext:
+def build_security(request: Optional[Request]) -> SecurityContext:
     return SecurityContext(
         fraud_score=15,
         session_id=str(uuid.uuid4()),
@@ -483,6 +500,31 @@ async def recent_orders(
     return [serialize_order_record(order) for order in orders]
 
 
+@app.get("/orders", response_model=list[OrderRecordSummary])
+async def list_orders(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id, usuario o estado"),
+    db: AsyncSession = Depends(get_db),
+) -> list[OrderRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    stmt = select(Order).order_by(desc(Order.id))
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            Order.status.cast(String).ilike(q),
+            Order.internal_status.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(Order.id == int(search))
+            clauses.append(Order.user_id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    orders = result.scalars().all()
+    return [serialize_order_record(order) for order in orders]
+
+
 @app.get("/orders/{order_id}", response_model=OrderRecordSummary)
 async def get_order(order_id: int, db: AsyncSession = Depends(get_db)) -> OrderRecordSummary:
     await apply_chaos_latency_and_timeout()
@@ -542,6 +584,14 @@ async def create_order(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> OrderResponse:
+    return await _process_order(req, request, db)
+
+
+async def _process_order(
+    req: OrderRequest,
+    request: Optional[Request],
+    db: AsyncSession,
+) -> OrderResponse:
     await apply_chaos_latency_and_timeout()
 
     metadata = build_metadata(request)
@@ -552,6 +602,7 @@ async def create_order(
         "payment": None,
         "notification": None,
     }
+    timings: dict[str, int] = {}
 
     if should_simulate_failure():
         return OrderResponse(
@@ -561,9 +612,11 @@ async def create_order(
             message="Order service simulated failure",
             order=build_placeholder_order("service_error"),
             downstream=downstream,
+            timings=timings,
         )
 
     async with httpx.AsyncClient() as client:
+        t_user = time.time()
         try:
             user_response = await call_service(
                 client,
@@ -594,6 +647,7 @@ async def create_order(
 
         user_data = user_response.json()
         downstream["user"] = user_data
+        timings["user_ms"] = int((time.time() - t_user) * 1000)
 
         if not user_data.get("valid"):
             return OrderResponse(
@@ -605,6 +659,7 @@ async def create_order(
                 downstream=downstream,
             )
 
+        t_inventory = time.time()
         try:
             inventory_response = await call_service(
                 client,
@@ -689,6 +744,8 @@ async def create_order(
                 downstream=downstream,
             )
 
+        timings["inventory_ms"] = int((time.time() - t_inventory) * 1000)
+
         unit_price = Decimal(str(item.get("unit_price", 0))).quantize(Decimal("0.01"))
         total_amount = (unit_price * req.quantity).quantize(Decimal("0.01"))
         order = build_order_details(None, inventory_data, security)
@@ -720,6 +777,7 @@ async def create_order(
         order.id = db_order.id
         customer_context = user_data.get("customer", {})
 
+        t_payment = time.time()
         try:
             async def do_payment():
                 # call_service()'s own retry loop only covers transport-level
@@ -795,6 +853,8 @@ async def create_order(
         else:
             payment_error = None
 
+        timings["payment_ms"] = int((time.time() - t_payment) * 1000)
+
         if payment_error is not None:
             order.internal_status = "payment_failed"
             try:
@@ -864,6 +924,7 @@ async def create_order(
         language_preference = customer_context.get("language_preference")
         notification_warning = None
 
+        t_notification = time.time()
         try:
             # Same shape as do_payment(): notification-service's simulated
             # failure is a normal 200 with {"status": "error"}, which
@@ -922,6 +983,8 @@ async def create_order(
             downstream["notification"] = {"status": "error", "message": str(exc)}
             notification_warning = str(exc)
 
+        timings["notification_ms"] = int((time.time() - t_notification) * 1000)
+
         if notification_warning is not None:
             order.internal_status = "completed_notification_failed"
             try:
@@ -955,6 +1018,7 @@ async def create_order(
                 message=f"Order completed but notification failed: {notification_warning}",
                 order=order,
                 downstream=downstream,
+                timings=timings,
             )
 
         order.internal_status = "completed"
@@ -989,7 +1053,80 @@ async def create_order(
         message="Order completed successfully",
         order=order,
         downstream=downstream,
+        timings=timings,
     )
+
+
+@app.post("/orders/generate")
+async def generate_orders(
+    payload: OrderGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk-generates orders through the real orchestration flow.
+
+    - If `user_id` is given, every order is placed for that user.
+    - Otherwise each order picks a random active user.
+    Products are chosen randomly among those currently in stock.
+    """
+    await apply_chaos_latency_and_timeout()
+    count = max(1, min(payload.count, 1000))
+
+    if payload.user_id is not None:
+        user_ids = [payload.user_id]
+    else:
+        result = await db.execute(
+            select(User.id).where(User.data["active"].astext == "true")
+        )
+        user_ids = [row[0] for row in result.all()]
+
+    result = await db.execute(select(Product.id).where(Product.quantity > 0))
+    product_ids = [row[0] for row in result.all()]
+
+    if not user_ids:
+        return {"message": "No active users available", "generated": 0, "failed": 0}
+    if not product_ids:
+        return {"message": "No products in stock to order", "generated": 0, "failed": 0}
+
+    generated = 0
+    failed = 0
+    for _ in range(count):
+        req = OrderRequest(
+            user_id=random.choice(user_ids),
+            product_id=random.choice(product_ids),
+            quantity=1,
+        )
+        resp = await _process_order(req, None, db)
+        if resp.status == "success":
+            generated += 1
+        else:
+            failed += 1
+
+    return {"count": count, "generated": generated, "failed": failed}
+
+
+@app.get("/resilience/retries")
+def get_retries_config():
+    return {
+        "enabled": RETRY_ENABLED,
+        "count": RETRY_COUNT,
+        "delay_ms": RETRY_DELAY_MS,
+    }
+
+
+@app.post("/resilience/retries")
+def set_retries_config(config: RetriesConfig):
+    global RETRY_ENABLED, RETRY_COUNT, RETRY_DELAY_MS
+    if config.enabled is not None:
+        RETRY_ENABLED = config.enabled
+    if config.count is not None:
+        RETRY_COUNT = config.count
+    if config.delay_ms is not None:
+        RETRY_DELAY_MS = config.delay_ms
+    return {
+        "enabled": RETRY_ENABLED,
+        "count": RETRY_COUNT,
+        "delay_ms": RETRY_DELAY_MS,
+    }
 
 
 @app.post("/chaos/config")
