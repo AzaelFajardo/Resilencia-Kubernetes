@@ -19,7 +19,7 @@ export function help(tip) {
 }
 
 export function card(title, tip, body, opts = {}) {
-  const cls = opts.full ? 'card full' : 'card';
+  const cls = opts.full ? 'card full' : opts.small ? 'card small' : 'card';
   return `<section class="${cls}"><header class="card-h"><h2>${esc(title)}</h2>` +
     (tip ? help(tip) : '') +
     `</header><div class="card-b">${body}</div></section>`;
