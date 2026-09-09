@@ -217,7 +217,10 @@ export function render(view) {
       if (up) {
         dotEl.className = 'dot up';
         if (btn) { btn.textContent = 'Detener'; btn.dataset.action = 'stop'; }
-        nodeEl.classList.remove('down');
+        // When healthy, clear any stale flow state (e.g. "skipped"/"done-err"
+        // left by an order that failed while a dependency was down) so the
+        // node doesn't stay looking "off" after the service recovers.
+        nodeEl.classList.remove('down', 'pending', 'done-ok', 'done-err', 'skipped');
       } else {
         dotEl.className = 'dot down';
         if (btn) { btn.textContent = 'Levantar'; btn.dataset.action = 'start'; }

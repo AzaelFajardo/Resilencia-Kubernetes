@@ -18,10 +18,7 @@
   --yellow: #b45309;
   --accent: #326ce5;
   --accent-2: #2456c4;
-  --clay-card: 0 10px 24px rgba(15, 23, 42, .10),
-    inset 0 2px 0 rgba(255, 255, 255, .95),
-    inset 0 -4px 8px rgba(15, 23, 42, .06);
-  --clay-btn: 0 4px 10px rgba(50, 108, 229, .30), inset 0 1px 0 rgba(255, 255, 255, .55);
+  --card-shadow: 0 6px 18px rgba(15, 23, 42, .08);
 }
 
 * { box-sizing: border-box; }
@@ -46,7 +43,7 @@ body {
   box-shadow: 0 4px 16px rgba(15, 23, 42, .06);
 }
 .brand { display: flex; align-items: center; gap: 14px; }
-.k8s-logo { color: var(--accent); flex: none; filter: drop-shadow(0 2px 3px rgba(50,108,229,.3)); }
+.k8s-logo { color: var(--accent); flex: none; }
 .brand h1 { font-size: 17px; font-weight: 800; margin: 0; letter-spacing: .03em; }
 .brand .sub { font-size: 12px; color: var(--muted); display: block; }
 .health { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
@@ -55,7 +52,6 @@ body {
   font-size: 12px; color: var(--muted); font-weight: 600;
   padding: 3px 11px; border: 1px solid var(--border); border-radius: 999px;
   background: var(--panel);
-  box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(15,23,42,.08);
 }
 .links a { color: var(--muted); text-decoration: none; margin-right: 14px; font-size: 13px; font-weight: 600; }
 .links a:hover { color: var(--accent); }
@@ -129,7 +125,7 @@ body {
   border-radius: 20px;
   padding: 22px;
   min-width: 0;
-  box-shadow: var(--clay-card);
+  box-shadow: var(--card-shadow);
 }
 .card-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; }
 .card-h h2 {
@@ -151,15 +147,11 @@ body {
   background: var(--accent); border: 1px solid var(--accent); color: #fff;
   padding: 8px 16px; border-radius: 10px; font-size: 13px; font-weight: 700;
   cursor: pointer;
-  box-shadow: var(--clay-btn);
 }
 .btn:hover { background: var(--accent-2); border-color: var(--accent-2); }
-.btn.secondary {
-  background: var(--panel); color: var(--text); border-color: var(--border-2);
-  box-shadow: inset 0 1px 0 #fff, 0 2px 5px rgba(15,23,42,.08);
-}
+.btn.secondary { background: var(--panel); color: var(--text); border-color: var(--border-2); }
 .btn.secondary:hover { border-color: var(--accent); color: var(--accent); background: #eef4ff; }
-.btn.danger { background: var(--panel); color: var(--red); border-color: var(--red); box-shadow: inset 0 1px 0 #fff, 0 2px 5px rgba(185,28,28,.12); }
+.btn.danger { background: var(--panel); color: var(--red); border-color: var(--red); }
 .btn.danger:hover { background: var(--red); color: #fff; }
 .btn.sm { padding: 5px 11px; font-size: 12px; }
 
@@ -168,10 +160,9 @@ body {
 .seg button {
   background: var(--panel); color: var(--muted); border: 1px solid var(--border-2);
   padding: 7px 13px; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer;
-  box-shadow: inset 0 1px 0 #fff, 0 2px 4px rgba(15,23,42,.06);
 }
 .seg button:hover { color: var(--text); border-color: var(--accent); }
-.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: var(--clay-btn); }
+.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* ---------- Forms ---------- */
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -244,7 +235,7 @@ input[type="number"] { width: 88px; }
 .toast {
   padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 600;
   background: var(--panel); border: 1px solid var(--border);
-  box-shadow: var(--clay-card);
+  box-shadow: var(--card-shadow);
 }
 .toast.ok { border-left: 4px solid var(--green); }
 .toast.err { border-left: 4px solid var(--red); }
@@ -256,7 +247,6 @@ input[type="number"] { width: 88px; }
   padding: 11px 16px; border: 1px solid var(--border-2); border-radius: 14px;
   background: var(--panel-2); font-size: 13px; font-weight: 600; min-width: 170px;
   transition: opacity .25s, border-color .25s, background .25s;
-  box-shadow: inset 0 1px 0 #fff, 0 2px 5px rgba(15,23,42,.07);
 }
 .flow .node.client { border-color: var(--border-2); color: var(--muted); text-align: center; }
 .flow .node.hub { border-color: var(--accent); font-weight: 800; background: #e9f0ff; }
