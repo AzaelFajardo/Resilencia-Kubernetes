@@ -1257,6 +1257,15 @@ def set_retries_config(config: RetriesConfig):
     }
 
 
+@app.get("/chaos/config")
+def get_chaos_config():
+    return {
+        "FAILURE_RATE": FAILURE_RATE,
+        "LATENCY_MS": LATENCY_MS,
+        "TIMEOUT_RATE": TIMEOUT_RATE,
+    }
+
+
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
     global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE

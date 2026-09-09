@@ -238,6 +238,17 @@ class ChaosUpdate(BaseModel):
     TIMEOUT_RATE: Optional[float] = None
 
 
+@app.get("/api/chaos/{service}")
+async def get_chaos(service: str):
+    if service not in SERVICES:
+        raise HTTPException(status_code=400, detail=f"unknown service: {service}")
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{SERVICES[service]}/chaos/config", timeout=5.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"{service}-service unreachable")
+        return r.json()
+
+
 @app.post("/api/chaos")
 async def set_chaos(update: ChaosUpdate):
     if update.service not in SERVICES:

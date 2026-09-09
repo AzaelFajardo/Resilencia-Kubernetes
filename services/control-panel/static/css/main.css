@@ -109,6 +109,15 @@ body {
 .btn.danger:hover { background: var(--red); color: #fff; }
 .btn.sm { padding: 4px 9px; font-size: 11px; }
 
+/* Segmented control (button-based selection) */
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg button {
+  background: transparent; color: var(--muted); border: 1px solid var(--border-2);
+  padding: 5px 10px; border-radius: 5px; font-size: 11px; font-weight: 500; cursor: pointer;
+}
+.seg button:hover { color: var(--text); border-color: var(--accent); }
+.seg button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
 /* ---------- Forms ---------- */
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 label { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }

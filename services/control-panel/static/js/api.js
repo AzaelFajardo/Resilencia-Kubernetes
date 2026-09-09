@@ -34,6 +34,16 @@ export const API = {
   kubernetes: () => api('/api/kubernetes'),
 
   chaosSet: (service, cfg) => post('/api/chaos', { service, ...cfg }),
+  getChaos: (service) => api(`/api/chaos/${service}`),
+  chaosSetAll: async (cfg) => {
+    const svcs = ['order', 'user', 'inventory', 'payment', 'notification'];
+    const out = [];
+    for (const s of svcs) {
+      try { out.push({ service: s, ...(await post('/api/chaos', { service: s, ...cfg })) }); }
+      catch (e) { out.push({ service: s, error: e.message }); }
+    }
+    return out;
+  },
   chaosResetAll: async () => {
     const svcs = ['order', 'user', 'inventory', 'payment', 'notification'];
     const out = [];
