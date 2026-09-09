@@ -1,0 +1,58 @@
+// api.js — thin fetch wrapper + typed endpoint helpers for the control-panel API.
+
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  let body = null;
+  try { body = await r.json(); } catch (_) { body = {}; }
+  if (!r.ok) throw new Error((body && body.detail) || `${r.status} ${r.statusText}`);
+  return body;
+}
+
+function post(path, data) {
+  return api(path, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(data ?? {}) });
+}
+
+function patch(path, data) {
+  return api(path, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify(data ?? {}) });
+}
+
+function del(path) {
+  return api(path, { method: 'DELETE' });
+}
+
+export const API = {
+  health: () => api('/api/health'),
+  counts: () => api('/api/counts'),
+  resources: () => api('/api/resources'),
+  disk: () => api('/api/disk'),
+  latency: () => api('/api/latency'),
+  alerts: () => api('/api/alerts'),
+  circuitBreaker: () => api('/api/circuit-breaker'),
+  config: () => api('/api/config'),
+  kubernetes: () => api('/api/kubernetes'),
+
+  chaosSet: (service, cfg) => post('/api/chaos', { service, ...cfg }),
+  chaosResetAll: async () => {
+    const svcs = ['order', 'user', 'inventory', 'payment', 'notification'];
+    const out = [];
+    for (const s of svcs) {
+      try { out.push(await post('/api/chaos', { service: s, FAILURE_RATE: 0.0, LATENCY_MS: 0, TIMEOUT_RATE: 0.0 })); }
+      catch (e) { out.push({ error: e.message }); }
+    }
+    return out;
+  },
+
+  placeOrder: (user_id, product_id, quantity) => post('/api/orders', { user_id, product_id, quantity }),
+  userOrders: (id, limit = 20) => api(`/api/users/${id}/orders?limit=${limit}`),
+  generate: (what) => post(`/api/generate/${what}`),
+  recent: (entity, limit = 10) => api(`/api/recent/${entity}?limit=${limit}`),
+
+  listEntities: (entity, offset = 0, limit = 20) => api(`/api/entities/${entity}?offset=${offset}&limit=${limit}`),
+  createEntity: (entity, body) => post(`/api/entities/${entity}`, body),
+  updateEntity: (entity, id, body) => patch(`/api/entities/${entity}/${id}`, body),
+  deleteEntity: (entity, id) => del(`/api/entities/${entity}/${id}`),
+};
+
+export { api, post, patch, del };

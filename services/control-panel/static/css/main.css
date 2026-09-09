@@ -1,0 +1,198 @@
+/* =====================================================================
+   Resilencia-Kubernetes — Control Panel · Design system
+   Dark, dense, minimal. No external dependencies.
+   ===================================================================== */
+
+:root {
+  --bg: #0f1115;
+  --bg-2: #14171d;
+  --panel: #171a21;
+  --panel-2: #1c2029;
+  --border: #2a2e37;
+  --border-2: #363b47;
+  --text: #e6e8eb;
+  --muted: #8b93a1;
+  --muted-2: #5f6774;
+  --green: #3ecf8e;
+  --red: #e5484d;
+  --yellow: #f5a623;
+  --accent: #5b8def;
+  --accent-2: #4a7bd8;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 20px;
+  padding: 12px 20px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+  width: 12px; height: 12px; border-radius: 3px;
+  background: var(--accent); box-shadow: 0 0 0 3px rgba(91,141,239,.25);
+}
+.brand h1 { font-size: 14px; font-weight: 700; margin: 0; letter-spacing: .04em; }
+.brand .sub { font-size: 11px; color: var(--muted); display: block; }
+.health { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
+.health .chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--muted);
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 10px;
+}
+.links a { color: var(--muted); text-decoration: none; margin-right: 14px; font-size: 12px; }
+.links a:hover { color: var(--accent); }
+
+/* ---------- Tabs nav ---------- */
+.tabs {
+  position: sticky; top: 47px; z-index: 15;
+  display: flex; gap: 2px; overflow-x: auto;
+  padding: 0 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.tabs a {
+  padding: 11px 14px 10px; font-size: 12.5px; font-weight: 500;
+  color: var(--muted); text-decoration: none;
+  border-bottom: 2px solid transparent; white-space: nowrap;
+}
+.tabs a:hover { color: var(--text); }
+.tabs a.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ---------- Layout ---------- */
+.view { padding: 18px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 16px; }
+
+/* ---------- Cards ---------- */
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px; min-width: 0;
+}
+.card.full { grid-column: 1 / -1; }
+.card-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.card-h h2 {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--muted); margin: 0;
+}
+.card-b { min-width: 0; }
+
+/* ---------- Tables ---------- */
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tbl th, .tbl td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.tbl th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.tbl tr:hover td { background: var(--panel-2); }
+.tbl td.muted { color: var(--muted-2); }
+
+/* ---------- Buttons ---------- */
+.btn {
+  background: var(--accent); border: 1px solid var(--accent); color: #fff;
+  padding: 7px 12px; border-radius: 5px; font-size: 12px; font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover { background: var(--accent-2); }
+.btn.secondary { background: transparent; color: var(--text); border-color: var(--border-2); }
+.btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn.danger { background: transparent; color: var(--red); border-color: var(--red); }
+.btn.danger:hover { background: var(--red); color: #fff; }
+.btn.sm { padding: 4px 9px; font-size: 11px; }
+
+/* ---------- Forms ---------- */
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+label { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+input, select, textarea {
+  background: var(--bg); border: 1px solid var(--border-2); color: var(--text);
+  padding: 6px 8px; border-radius: 5px; font-size: 12px; width: auto;
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+input[type="number"] { width: 84px; }
+
+/* ---------- Status bits ---------- */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot.up { background: var(--green); }
+.dot.down { background: var(--red); }
+.badge { padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.badge.ok { background: #123a2a; color: var(--green); }
+.badge.bad { background: #3a1414; color: var(--red); }
+.badge.warn { background: #3a2f0f; color: var(--yellow); }
+.badge.CLOSED { background: #123a2a; color: var(--green); }
+.badge.OPEN { background: #3a1414; color: var(--red); }
+.badge.HALF_OPEN { background: #3a2f0f; color: var(--yellow); }
+.chip { display: inline-block; font-size: 11px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 10px; margin: 1px 2px; }
+.chip.firing { border-color: var(--red); color: var(--red); }
+.chip.pending { border-color: var(--yellow); color: var(--yellow); }
+.chip.inactive { color: var(--muted); }
+
+/* ---------- Messages / states ---------- */
+.msg { font-size: 11px; padding: 3px 0; min-height: 16px; }
+.msg.ok { color: var(--green); }
+.msg.err { color: var(--red); }
+.muted { color: var(--muted); }
+.pre {
+  background: var(--bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border);
+  overflow: auto; max-height: 300px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+}
+.empty { color: var(--muted-2); font-size: 12px; padding: 14px; text-align: center; }
+.loading { display: flex; align-items: center; gap: 8px; color: var(--muted); padding: 12px; }
+.spin {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border-2); border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Help (tooltips) ---------- */
+[data-tip] { position: relative; cursor: help; }
+.help {
+  display: inline-block; width: 15px; height: 15px; line-height: 15px; text-align: center;
+  border-radius: 50%; background: var(--panel-2); border: 1px solid var(--border-2);
+  color: var(--muted); font-size: 10px; font-weight: 700; flex: none;
+}
+[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 50;
+  width: 240px; padding: 8px 10px;
+  background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px;
+  color: var(--text); font-size: 11px; font-weight: 400; line-height: 1.45;
+  box-shadow: 0 6px 20px rgba(0,0,0,.45); cursor: default;
+  white-space: normal;
+}
+.hint { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
+
+/* ---------- Toasts ---------- */
+.toasts {
+  position: fixed; bottom: 16px; right: 16px; z-index: 100;
+  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+}
+.toast {
+  padding: 10px 14px; border-radius: 6px; font-size: 12px;
+  background: var(--panel-2); border: 1px solid var(--border-2);
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.toast.ok { border-left: 3px solid var(--green); }
+.toast.err { border-left: 3px solid var(--red); }
+
+/* ---------- Flow diagram (used from F4, classes reserved) ---------- */
+.flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.flow .node { padding: 8px 12px; border: 1px solid var(--border-2); border-radius: 6px; background: var(--panel-2); font-size: 12px; }
+.flow .arrow { color: var(--muted); }
+
+/* ---------- iframe (Grafana) ---------- */
+iframe.grafana { width: 100%; height: 720px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; }
+  .grid { grid-template-columns: 1fr; }
+}

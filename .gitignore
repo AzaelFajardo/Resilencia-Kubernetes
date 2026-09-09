@@ -28,6 +28,9 @@ IDEA.md
 # Project context document (generated, not part of the repo)
 contexto.md
 
+# Frontend refactor plan (working doc, not part of the repo)
+ACTION-PLAN-FRONTEND.md
+
 # Kubernetes client certificates (machine-specific, opt-in for the control panel)
 k8s/certs/*
 !k8s/certs/.gitkeep
