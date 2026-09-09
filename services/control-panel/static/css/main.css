@@ -59,21 +59,40 @@ body {
 .refresh-ctl .lbl { color: var(--muted); font-size: 11px; }
 .refresh-ctl input { width: 52px; padding: 4px 6px; }
 
-/* ---------- Tabs nav ---------- */
+/* ---------- Sidebar nav (vertical, auto-hide) ---------- */
 .tabs {
-  position: sticky; top: 47px; z-index: 15;
-  display: flex; gap: 2px; overflow-x: auto;
-  padding: 0 16px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  position: fixed; top: 0; bottom: 0; left: 0;
+  width: 220px;
+  padding: 64px 0 16px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto;
+  transform: translateX(calc(-100% + 14px));
+  transition: transform .22s ease;
+  z-index: 15;
+  box-shadow: 4px 0 20px rgba(0, 0, 0, .4);
+}
+.tabs:hover { transform: translateX(0); }
+.tabs::after {
+  content: "";
+  position: absolute; right: 3px; top: 50%;
+  transform: translateY(-50%);
+  width: 3px; height: 52px; border-radius: 2px;
+  background: var(--border-2);
+  opacity: .7;
 }
 .tabs a {
-  padding: 11px 14px 10px; font-size: 12.5px; font-weight: 500;
+  display: block;
+  padding: 11px 20px;
+  font-size: 12px; font-weight: 500;
   color: var(--muted); text-decoration: none;
-  border-bottom: 2px solid transparent; white-space: nowrap;
+  text-transform: uppercase; letter-spacing: .05em;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
 }
-.tabs a:hover { color: var(--text); }
-.tabs a.active { color: var(--text); border-bottom-color: var(--accent); }
+.tabs a:hover { color: var(--text); background: var(--panel); }
+.tabs a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel); }
 
 /* ---------- Layout ---------- */
 .view { padding: 18px; }
