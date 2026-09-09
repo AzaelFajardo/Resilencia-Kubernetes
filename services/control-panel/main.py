@@ -430,6 +430,10 @@ async def generate_faker(what: str, count: int = 10):
 class OrderGenerate(BaseModel):
     count: int = 1
     user_id: Optional[int] = None
+    clients: Optional[int] = None
+    orders_per_client: Optional[int] = None
+    quantity: int = 1
+    product_id: Optional[int] = None
 
 
 @app.post("/api/orders/generate")
@@ -439,6 +443,42 @@ async def generate_orders(gen: OrderGenerate):
         r = await client.post(
             f"{SERVICES['order']}/orders/generate", json=gen.model_dump(), timeout=600.0
         )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+
+
+class SimulateStart(BaseModel):
+    rate: float = 5.0
+    quantity: int = 1
+    clients: Optional[int] = None
+    duration: Optional[int] = None
+
+
+@app.get("/api/orders/simulate/status")
+async def simulate_status():
+    async with httpx.AsyncClient() as client:
+        r = await client.get(f"{SERVICES['order']}/orders/simulate/status", timeout=5.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="order-service unreachable")
+        return r.json()
+
+
+@app.post("/api/orders/simulate/start")
+async def simulate_start(cfg: SimulateStart):
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SERVICES['order']}/orders/simulate/start", json=cfg.model_dump(), timeout=10.0
+        )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+
+
+@app.post("/api/orders/simulate/stop")
+async def simulate_stop():
+    async with httpx.AsyncClient() as client:
+        r = await client.post(f"{SERVICES['order']}/orders/simulate/stop", timeout=10.0)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()

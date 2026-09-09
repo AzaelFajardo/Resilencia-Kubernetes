@@ -6,6 +6,7 @@ import { dot } from './ui.js';
 
 import * as home from './tabs/home.js';
 import * as orders from './tabs/orders.js';
+import * as pruebas from './tabs/pruebas.js';
 import * as users from './tabs/users.js';
 import * as inventory from './tabs/inventory.js';
 import * as payments from './tabs/payments.js';
@@ -16,6 +17,7 @@ import * as kubernetes from './tabs/kubernetes.js';
 
 register('home', home.render);
 register('orders', orders.render);
+register('pruebas', pruebas.render);
 register('users', users.render);
 register('inventory', inventory.render);
 register('payments', payments.render);

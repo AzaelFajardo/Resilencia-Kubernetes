@@ -93,6 +93,7 @@ body {
 .tbl th, .tbl td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .tbl th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 .tbl tr:hover td { background: var(--panel-2); }
+.tbl tr.clickable { cursor: pointer; }
 .tbl td.muted { color: var(--muted-2); }
 
 /* ---------- Buttons ---------- */

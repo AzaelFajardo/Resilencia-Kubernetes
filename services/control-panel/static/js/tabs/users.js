@@ -1,47 +1,27 @@
-// users.js — Clientes: resumen, recientes, generación y CRUD.
+// users.js — Clientes: búsqueda, listado, fakers y edición.
 
-import { API } from '../api.js';
-import { card, table, esc } from '../ui.js';
-import { mountCrud } from '../crud.js';
+import { mountEntity } from '../entity.js';
 
 export function render(view) {
-  view.innerHTML = `
-    <div class="grid">
-      ${card('Resumen de clientes',
-        'Total de clientes persistidos en PostgreSQL (tabla users, perfil completo en columna JSONB).',
-        table(['Métrica', 'Valor'], [])
-          .replace('<tbody></tbody>', '<tbody id="u-count"></tbody>'))}
-      ${card('Clientes recientes',
-        'Últimos clientes creados (por id descendente).',
-        table(['ID', 'Nombre', 'Email', 'Estado'], [])
-          .replace('<tbody></tbody>', '<tbody id="u-recent"></tbody>'))}
-      ${card('Generar datos',
-        'Genera los clientes de ejemplo integrados. En la Fase F1 se añadirá generación Faker ilimitada con cantidad (nombre, email, etc. aleatorios).',
-        '<button id="u-gen" class="btn secondary" type="button">Generar usuarios</button><span class="msg" id="u-genmsg"></span>')}
-    </div>
-  `;
-
-  mountCrud(view, 'users', 'Clientes');
-
-  refresh();
-
-  view.querySelector('#u-gen').addEventListener('click', async () => {
-    const m = view.querySelector('#u-genmsg');
-    try { const r = await API.generate('users'); m.className = 'msg ok'; m.textContent = JSON.stringify(r); refresh(); }
-    catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+  mountEntity(view, {
+    entity: 'users',
+    label: 'Clientes',
+    hint: 'Clientes persistidos en PostgreSQL (perfil completo en JSONB). Busca por id, nombre o email. "Generar Clientes" crea registros Faker reales (sin límite). Haz clic en una fila para ver el detalle, editar o borrar.',
+    columns: [
+      { label: 'ID', key: 'id' },
+      { label: 'Nombre', key: 'first_name' },
+      { label: 'Apellido', key: 'last_name' },
+      { label: 'Email', key: 'email' },
+      { label: 'Nivel', key: 'loyalty_tier' },
+      { label: 'Activo', key: 'active', render: (r) => `<span class="badge ${r.active ? 'ok' : 'bad'}">${r.active ? 'activo' : 'inactivo'}</span>` },
+    ],
+    faker: { what: 'users', label: 'Clientes' },
+    editFields: [
+      { name: 'first_name', label: 'Nombre' },
+      { name: 'last_name', label: 'Apellido' },
+      { name: 'email', label: 'Email' },
+      { name: 'active', label: 'Activo', type: 'select', options: ['true', 'false'] },
+    ],
+    buildEdit: (d) => ({ first_name: d.first_name, last_name: d.last_name, email: d.email, active: d.active === 'true' }),
   });
-
-  async function refresh() {
-    try {
-      const c = await API.counts();
-      view.querySelector('#u-count').innerHTML =
-        `<tr><td>total</td><td>${esc(c.user ?? '—')}</td></tr>`;
-    } catch (_) {}
-    try {
-      const r = await API.recent('users', 10);
-      view.querySelector('#u-recent').innerHTML = r.map((u) =>
-        `<tr><td>${u.id}</td><td>${esc(u.first_name)}</td><td>${esc(u.email)}</td><td>${u.active ? 'activo' : 'inactivo'}</td></tr>`
-      ).join('') || `<tr><td colspan="4" class="muted">sin clientes</td></tr>`;
-    } catch (_) {}
-  }
 }

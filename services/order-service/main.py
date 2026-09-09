@@ -18,7 +18,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import desc, func, select, or_, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Base, Order, OrderStatus, User, Product, engine, get_db
+from database import Base, Order, OrderStatus, User, Product, engine, get_db, AsyncSessionLocal
 from tracing import setup_tracing
 
 
@@ -104,6 +104,17 @@ class OrderRequest(BaseModel):
 class OrderGenerateRequest(BaseModel):
     count: int = 1
     user_id: Optional[int] = None
+    clients: Optional[int] = None
+    orders_per_client: Optional[int] = None
+    quantity: int = 1
+    product_id: Optional[int] = None
+
+
+class SimulateStart(BaseModel):
+    rate: float = 5.0
+    quantity: int = 1
+    clients: Optional[int] = None
+    duration: Optional[int] = None
 
 
 class RetriesConfig(BaseModel):
@@ -1057,6 +1068,51 @@ async def _process_order(
     )
 
 
+class SimulatorState:
+    def __init__(self):
+        self.running = False
+        self.task: Optional[asyncio.Task] = None
+        self.sent = 0
+        self.success = 0
+        self.failed = 0
+        self.rate = 0.0
+
+
+simulator = SimulatorState()
+
+
+async def _simulate_worker(
+    rate: float,
+    quantity: int,
+    user_ids: list[int],
+    product_ids: list[int],
+    duration: Optional[int],
+):
+    started = time.time()
+    while simulator.running:
+        if duration is not None and (time.time() - started) >= duration:
+            break
+
+        req = OrderRequest(
+            user_id=random.choice(user_ids),
+            product_id=random.choice(product_ids),
+            quantity=quantity,
+        )
+        async with AsyncSessionLocal() as db:
+            resp = await _process_order(req, None, db)
+        simulator.sent += 1
+        if resp.status == "success":
+            simulator.success += 1
+        else:
+            simulator.failed += 1
+
+        delay = 1.0 / rate
+        jitter = random.uniform(0.5, 1.5) * delay
+        await asyncio.sleep(jitter)
+
+    simulator.running = False
+
+
 @app.post("/orders/generate")
 async def generate_orders(
     payload: OrderGenerateRequest,
@@ -1065,14 +1121,84 @@ async def generate_orders(
     """Bulk-generates orders through the real orchestration flow.
 
     - If `user_id` is given, every order is placed for that user.
+    - If `clients` (+ `orders_per_client`) is given, orders are distributed
+      across that many distinct active users.
     - Otherwise each order picks a random active user.
-    Products are chosen randomly among those currently in stock.
+    `quantity` is the number of items per order; `product_id` pins a product.
     """
     await apply_chaos_latency_and_timeout()
-    count = max(1, min(payload.count, 1000))
+    count = max(1, min(payload.count, 100000))
+    quantity = max(1, min(payload.quantity, 1000))
 
     if payload.user_id is not None:
-        user_ids = [payload.user_id]
+        chosen = [payload.user_id]
+    else:
+        result = await db.execute(
+            select(User.id).where(User.data["active"].astext == "true")
+        )
+        all_user_ids = [row[0] for row in result.all()]
+        if payload.clients is not None and all_user_ids:
+            chosen = random.sample(all_user_ids, min(payload.clients, len(all_user_ids)))
+        else:
+            chosen = all_user_ids
+
+    if payload.product_id is not None:
+        product_ids = [payload.product_id]
+    else:
+        result = await db.execute(select(Product.id).where(Product.quantity > 0))
+        product_ids = [row[0] for row in result.all()]
+
+    if not chosen:
+        return {"message": "No active users available", "generated": 0, "failed": 0}
+    if not product_ids:
+        return {"message": "No products in stock to order", "generated": 0, "failed": 0}
+
+    jobs: list[OrderRequest] = []
+    if payload.orders_per_client is not None and payload.user_id is None:
+        per = max(1, min(payload.orders_per_client, 1000))
+        for uid in chosen:
+            for _ in range(per):
+                jobs.append(OrderRequest(user_id=uid, product_id=random.choice(product_ids), quantity=quantity))
+    else:
+        for _ in range(count):
+            jobs.append(OrderRequest(user_id=random.choice(chosen), product_id=random.choice(product_ids), quantity=quantity))
+
+    generated = 0
+    failed = 0
+    for req in jobs:
+        resp = await _process_order(req, None, db)
+        if resp.status == "success":
+            generated += 1
+        else:
+            failed += 1
+
+    return {"count": len(jobs), "generated": generated, "failed": failed}
+
+
+@app.get("/orders/simulate/status")
+def simulate_status():
+    return {
+        "running": simulator.running,
+        "sent": simulator.sent,
+        "success": simulator.success,
+        "failed": simulator.failed,
+        "rate": simulator.rate,
+    }
+
+
+@app.post("/orders/simulate/start")
+async def simulate_start(cfg: SimulateStart, db: AsyncSession = Depends(get_db)):
+    if simulator.running:
+        return {"message": "Simulation already running", **simulate_status()}
+
+    rate = max(0.1, min(cfg.rate, 50.0))
+    quantity = max(1, min(cfg.quantity, 1000))
+
+    if cfg.clients is not None:
+        result = await db.execute(
+            select(User.id).where(User.data["active"].astext == "true").limit(cfg.clients)
+        )
+        user_ids = [row[0] for row in result.all()]
     else:
         result = await db.execute(
             select(User.id).where(User.data["active"].astext == "true")
@@ -1083,25 +1209,27 @@ async def generate_orders(
     product_ids = [row[0] for row in result.all()]
 
     if not user_ids:
-        return {"message": "No active users available", "generated": 0, "failed": 0}
+        return {"message": "No active users available", "running": False}
     if not product_ids:
-        return {"message": "No products in stock to order", "generated": 0, "failed": 0}
+        return {"message": "No products in stock to order", "running": False}
 
-    generated = 0
-    failed = 0
-    for _ in range(count):
-        req = OrderRequest(
-            user_id=random.choice(user_ids),
-            product_id=random.choice(product_ids),
-            quantity=1,
-        )
-        resp = await _process_order(req, None, db)
-        if resp.status == "success":
-            generated += 1
-        else:
-            failed += 1
+    simulator.sent = 0
+    simulator.success = 0
+    simulator.failed = 0
+    simulator.rate = rate
+    simulator.running = True
+    simulator.task = asyncio.create_task(
+        _simulate_worker(rate, quantity, user_ids, product_ids, cfg.duration)
+    )
+    return {"message": "Simulation started", **simulate_status()}
 
-    return {"count": count, "generated": generated, "failed": failed}
+
+@app.post("/orders/simulate/stop")
+def simulate_stop():
+    simulator.running = False
+    if simulator.task is not None:
+        simulator.task.cancel()
+    return {"message": "Simulation stopped", **simulate_status()}
 
 
 @app.get("/resilience/retries")

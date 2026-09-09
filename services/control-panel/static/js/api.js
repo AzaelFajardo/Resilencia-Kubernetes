@@ -49,10 +49,21 @@ export const API = {
   generate: (what) => post(`/api/generate/${what}`),
   recent: (entity, limit = 10) => api(`/api/recent/${entity}?limit=${limit}`),
 
-  listEntities: (entity, offset = 0, limit = 20) => api(`/api/entities/${entity}?offset=${offset}&limit=${limit}`),
+  listEntities: (entity, offset = 0, limit = 20, search = '') => {
+    const qs = `offset=${offset}&limit=${limit}${search ? '&search=' + encodeURIComponent(search) : ''}`;
+    return api(`/api/entities/${entity}?${qs}`);
+  },
   createEntity: (entity, body) => post(`/api/entities/${entity}`, body),
   updateEntity: (entity, id, body) => patch(`/api/entities/${entity}/${id}`, body),
   deleteEntity: (entity, id) => del(`/api/entities/${entity}/${id}`),
+
+  faker: (what, count = 100) => post(`/api/faker/${what}?count=${count}`),
+  generateOrders: (cfg) => post('/api/orders/generate', cfg),
+  simulateStatus: () => api('/api/orders/simulate/status'),
+  simulateStart: (cfg) => post('/api/orders/simulate/start', cfg),
+  simulateStop: () => post('/api/orders/simulate/stop'),
+  getRetries: () => api('/api/resilience/retries'),
+  setRetries: (cfg) => post('/api/resilience/retries', cfg),
 };
 
 export { api, post, patch, del };
