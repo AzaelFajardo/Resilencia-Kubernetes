@@ -29,6 +29,7 @@ Los puertos son configurables via `.env` (ver `.env.example`). Valores por defec
 | `inventory-service` | `8102` | Consulta, reserva y libera inventario |
 | `payment-service` | `8103` | Simula y persiste pagos |
 | `notification-service` | `8104` | Simula y persiste notificaciones |
+| `control-panel` | `8105` | Panel web para monitorizar, operar y probar el sistema |
 | `data-seeder` | n/a | Genera y carga datos Faker automaticamente al arrancar |
 | `postgres` | `5434` | Base de datos principal |
 | `prometheus` | `9091` | Scraping de metricas |
@@ -101,16 +102,45 @@ docker compose up --build -d
 - Prometheus: `http://localhost:9091`
 - Grafana: `http://localhost:3001`
 - Jaeger: `http://localhost:16687`
+- Panel de control: `http://localhost:8105`
 
 Credenciales de Grafana:
 
 - usuario: `admin`
 - contrasena: `admin`
 
+## Panel de control (web)
+
+El stack incluye `control-panel`, un panel web en `http://localhost:8105` para
+monitorizar, operar y probar todo el sistema sin usar la terminal. Está
+organizado en pestañas:
+
+- **Inicio** — salud de los 5 servicios, conteos, circuit breaker, alertas y un
+  diagrama vertical del flujo de servicios en tiempo real (con latencia por
+  salto). Permite **detener/levantar cada servicio** de verdad y colocar órdenes
+  de prueba (con resaltado de la orden generada).
+- **Órdenes** — colocar orden, historial por usuario, listado con búsqueda y
+  paginación, edición (estado/prioridad) y borrado.
+- **Pruebas** — ráfagas masivas de pedidos configurables (por cliente, artículos
+  por pedido) y **simulación continua** de tráfico (iniciar/detener, con estado
+  en vivo) para ver el efecto en las métricas.
+- **Clientes / Inventario** — búsqueda por id/nombre/email, paginación, edición,
+  borrado y **generación de datos Faker ilimitada** (con cantidad).
+- **Pagos / Notificaciones** — búsqueda, listado paginado y borrado.
+- **Resiliencia** — inyección de fallos por servicio (en %, ms y %) y **global**,
+  reintentos en runtime, circuit breaker en vivo, presets de fallo y **escenarios
+  de prueba** con resultados.
+- **Observabilidad** — latencia p50/p95/p99, throughput y errores, recursos
+  CPU/RAM/disco, objetivos de Prometheus, alertas y Grafana embebido.
+- **Kubernetes** — pods y HPA del cluster (solo lectura, opcional).
+
+Cada pestaña con datos en vivo tiene su propio control de **auto-refresco**
+(intervalo en segundos, mínimo 1) y botón de actualización manual.
+
 ## Control por terminal
 
-El proyecto es completamente headless: no hay UI web. El punto de control para el
-equipo es `cli.py` en la raiz del repo (Python estandar, sin dependencias nuevas).
+Ademas del panel web, existe `cli.py` en la raiz del repo (Python estandar, sin
+dependencias nuevas) como control por terminal:
 
 ```powershell
 python cli.py status
@@ -131,24 +161,36 @@ piden confirmacion antes de ejecutarse; usa `--yes` para saltarla en scripts.
 Se agregaron endpoints de lectura para consultar el estado sin tocar la logica transaccional:
 
 - `user-service`
+  - `GET /users` (paginado, `?offset/limit/search`)
   - `GET /users/count`
   - `GET /users/recent?limit=10`
 - `inventory-service`
-  - `GET /inventory?limit=10`
+  - `GET /inventory?limit=10` (con `?search=`)
   - `GET /inventory/stock?limit=10`
   - `GET /inventory/count`
 - `order-service`
+  - `GET /orders` (paginado, `?offset/limit/search`)
   - `GET /orders/recent?limit=10`
   - `GET /orders/count`
   - `GET /orders/{order_id}`
 - `payment-service`
+  - `GET /payments` (paginado, `?offset/limit/search`)
   - `GET /payments/recent?limit=10`
   - `GET /payments/count`
   - `GET /payments/by-order/{order_id}`
 - `notification-service`
+  - `GET /notifications` (paginado, `?offset/limit/search`)
   - `GET /notifications/recent?limit=10`
   - `GET /notifications/count`
   - `GET /notifications/by-order/{order_id}`
+
+Endpoints de operación/prueba añadidos para el panel:
+
+- `POST /users/faker?count=N` y `POST /inventory/faker?count=N` — datos Faker ilimitados.
+- `POST /orders/generate` — ráfaga masiva (`count`, `user_id`, `clients`, `orders_per_client`, `quantity`, `product_id`).
+- `POST /orders/simulate/start|stop` y `GET /orders/simulate/status` — simulación continua de tráfico.
+- `GET/POST /resilience/retries` — reintentos en runtime de `order-service`.
+- `GET /chaos/config` — estado actual del caos por servicio.
 
 ## Verificacion minima
 

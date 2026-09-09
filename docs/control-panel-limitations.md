@@ -6,6 +6,22 @@
 > progreso de la Fase 12; los detalles de implementación de cada corrección
 > viven en los commits y en `docs/ACTION-PLAN.md` (Phase 12).
 
+> **Actualización (refactor del frontend, F0–F6):** el panel se reescribió por
+> completo como una SPA de 10 pestañas (ver `README.md` "Panel de control").
+> Muchos gaps de esta lista ya están resueltos:
+> - **CRUD con formularios por entidad** en tablas con búsqueda/paginación
+>   (Clientes, Inventario, Órdenes, Pagos, Notificaciones) — sustituye al
+>   CRUD genérico por JSON (§1, §2).
+> - **Fakers ilimitados con cantidad** (`POST /users/faker`, `/inventory/faker`)
+>   y **generación masiva de órdenes** / **simulación continua** (§ de F2.1).
+> - **Latencia por servicio + alertas** en el panel (§3).
+> - **Caos global + reintentos en runtime + presets + escenarios** de prueba.
+> - **Detener/levantar servicios** de verdad desde el diagrama de flujo.
+> - Portabilidad multiplataforma (Windows/macOS/Linux) del panel (§5).
+>
+> Lo que **sigue abierto** está en `pendientes.md` (raíz del repo) y en los
+> apartados con ⚠️ de este documento.
+
 ## 1. CRUD real en los 5 microservicios (gap más grande)
 
 Hoy **ningún microservicio exponía `PUT`/`DELETE`** (solo `POST`/`GET`), así

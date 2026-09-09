@@ -266,6 +266,41 @@ every dashboard panel actually reads.
 See `docs/RESULTS.md` for the consolidated analysis this dashboard feeds
 into.
 
+## Control-panel backend endpoints (frontend refactor)
+
+The `control-panel` service (`:8105`) is a thin proxy/aggregation layer over
+the microservices and Prometheus. During the frontend refactor the following
+endpoints were added (proxies are exposed under `/api/*`, the real logic lives
+in each service):
+
+- `POST /users/faker?count=N` (user-service) and
+  `POST /inventory/faker?count=N` (inventory-service) — generate N Faker
+  records on demand (ids after the current max). Field definitions live in
+  `services/*/faker_utils.py` (mirrors `scripts/generate_data.py`).
+- `GET /users`, `GET /inventory`, `GET /orders`, `GET /payments`,
+  `GET /notifications` — now support pagination (`offset`/`limit`) and
+  `?search=` (id/name/email/status depending on the entity). `GET /orders`
+  (paginated) is new; previously only `/orders/recent` existed.
+- `POST /orders/generate` (order-service) — bulk-generates orders through the
+  real flow. Body: `count`, optional `user_id`, `clients`,
+  `orders_per_client`, `quantity`, `product_id`.
+- `POST /orders/simulate/start` / `POST /orders/simulate/stop` /
+  `GET /orders/simulate/status` (order-service) — a continuous background
+  task (asyncio) that places random orders at a configurable rate (`rate`
+  req/s, `quantity`, `clients`, optional `duration`). Status reports
+  `running/sent/success/failed/rate`.
+- `GET /resilience/retries` / `POST /resilience/retries` (order-service) —
+  read/toggle `RETRY_ENABLED`/`RETRY_COUNT`/`RETRY_DELAY_MS` at runtime
+  (previously only settable via env vars at boot).
+- `GET /chaos/config` (all 5 services) — read the current
+  `FAILURE_RATE`/`LATENCY_MS`/`TIMEOUT_RATE` (previously write-only).
+- `POST /api/services/{service}/{action}` (control-panel) — **stop/start a
+  microservice container for real** via the Docker SDK (socket mounted `rw`).
+  Stopping a service is reflected across the stack (health, order flow, etc.).
+- `GET /api/throughput` (control-panel) — per-service req/s and 5xx error rate
+  from Prometheus.
+- `GET /api/targets` (control-panel) — Prometheus scrape targets and health.
+
 ## Process notes (things that would otherwise be re-discovered the hard way)
 
 - **Seed stock is small on purpose** (`db/init.sql` gives product 1 only
