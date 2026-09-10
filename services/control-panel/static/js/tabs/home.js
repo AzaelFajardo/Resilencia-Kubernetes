@@ -2,7 +2,7 @@
 // ciclo de vida por servicio y resumen del sistema.
 
 import { API } from '../api.js';
-import { card, table, badge, dot, empty, esc, toast } from '../ui.js';
+import { card, table, badge, dot, empty, esc, toast, confirmDialog } from '../ui.js';
 import { mountRefreshControl } from '../interval.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
@@ -93,7 +93,7 @@ export function render(view) {
     btn.addEventListener('click', async () => {
       const svc = btn.dataset.svc;
       const action = btn.dataset.action;
-      if (action === 'stop' && !confirm(`¿Detener ${LABELS[svc]}? Afectará a todo el sistema (salud, flujo de órdenes, métricas).`)) return;
+      if (action === 'stop' && !(await confirmDialog(`¿Detener ${LABELS[svc]}? Afectará a todo el sistema (salud, flujo de órdenes, métricas).`))) return;
       btn.disabled = true;
       try {
         const r = await API.serviceAction(svc, action);
@@ -112,10 +112,17 @@ export function render(view) {
       const r = await API.placeOrder(1, pid, 1);
       const oid = r.order && r.order.id != null ? r.order.id : null;
       msg.textContent = 'orden #' + (oid ?? '?') + ' · status: ' + r.status;
-      if (oid != null) markHighlight(oid);
+      if (r.status === 'success') {
+        if (oid != null) markHighlight(oid);
+      } else {
+        toast(`No se completó la orden: ${r.message || r.status}`, 'err');
+      }
       animateFlow(r);
       refresh();
-    } catch (e) { msg.textContent = 'error: ' + e.message; }
+    } catch (e) {
+      msg.textContent = 'error: ' + e.message;
+      toast('No se pudo enviar la orden (¿algún servicio está detenido?): ' + e.message, 'err');
+    }
   }
 
   function markHighlight(id) {

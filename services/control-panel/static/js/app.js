@@ -29,6 +29,26 @@ register('kubernetes', kubernetes.render);
 start();
 refreshHealthStrip();
 setInterval(refreshHealthStrip, 5000);
+initTheme();
+
+function initTheme() {
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+
+  function apply(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('theme', theme); } catch (_) {}
+    btn.textContent = theme === 'dark' ? 'Claro' : 'Oscuro';
+  }
+
+  const saved = document.documentElement.getAttribute('data-theme') || 'light';
+  apply(saved);
+
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'light';
+    apply(cur === 'dark' ? 'light' : 'dark');
+  });
+}
 
 async function refreshHealthStrip() {
   const el = document.getElementById('healthStrip');

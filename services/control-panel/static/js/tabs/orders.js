@@ -1,7 +1,7 @@
 // orders.js — Órdenes: colocar, historial, listado/búsqueda y generación masiva.
 
 import { API } from '../api.js';
-import { card, esc } from '../ui.js';
+import { card, esc, toast } from '../ui.js';
 import { mountEntity } from '../entity.js';
 
 export function render(view) {
@@ -65,7 +65,13 @@ export function render(view) {
       msg.className = 'msg ' + (r.status === 'success' ? 'ok' : 'err');
       msg.textContent = 'status: ' + r.status + (r.message ? ' — ' + r.message : '');
       out.textContent = JSON.stringify(r, null, 2);
-    } catch (err) { msg.className = 'msg err'; msg.textContent = err.message; }
+      if (r.status !== 'success') {
+        toast(`No se completó la orden: ${r.message || r.status}`, 'err');
+      }
+    } catch (err) {
+      msg.className = 'msg err'; msg.textContent = err.message;
+      toast('No se pudo enviar la orden (¿algún servicio está detenido?): ' + err.message, 'err');
+    }
   });
 
   view.querySelector('#h-form').addEventListener('submit', async (e) => {

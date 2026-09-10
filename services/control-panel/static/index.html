@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Resilencia-Kubernetes — Panel de control</title>
+<script>
+  // Apply the saved theme before first paint to avoid a flash of the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
 <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
@@ -19,6 +28,7 @@
     </div>
   </div>
   <div class="health" id="healthStrip" data-tip="Estado en vivo de los 5 microservicios (GET /health)"></div>
+  <button id="themeToggle" class="btn sm secondary" data-tip="Alternar entre modo claro y oscuro">Oscuro</button>
   <div class="links">
     <a href="http://localhost:3001" target="_blank" data-tip="Visualización de métricas (Grafana)">Grafana</a>
     <a href="http://localhost:16687" target="_blank" data-tip="Visualización de trazas distribuidas (Jaeger)">Jaeger</a>

@@ -2,7 +2,7 @@
 // row detail, per-field edit, delete, and optional faker/bulk generation.
 
 import { API } from './api.js';
-import { card, esc, toast, empty } from './ui.js';
+import { card, esc, toast, empty, confirmDialog } from './ui.js';
 
 function idOf(row) {
   return row.id ?? row.product_id ?? row.order_id;
@@ -103,7 +103,7 @@ export function mountEntity(container, cfg) {
 
     box.querySelector('#d-del').addEventListener('click', async () => {
       const id = idOf(row);
-      if (!confirm(`¿Borrar ${cfg.label.toLowerCase()} id=${id}? (cascada según FK de la BD)`)) return;
+      if (!(await confirmDialog(`¿Borrar ${cfg.label.toLowerCase()} id=${id}? (cascada según FK de la BD)`))) return;
       try { await API.deleteEntity(cfg.entity, id); toast('Borrado', 'ok'); d.innerHTML = ''; load(); }
       catch (e) { toast('Error: ' + e.message, 'err'); }
     });
