@@ -11,7 +11,6 @@ import * as users from './tabs/users.js';
 import * as inventory from './tabs/inventory.js';
 import * as payments from './tabs/payments.js';
 import * as notifications from './tabs/notifications.js';
-import * as resilience from './tabs/resilience.js';
 import * as observability from './tabs/observability.js';
 import * as kubernetes from './tabs/kubernetes.js';
 
@@ -22,7 +21,6 @@ register('users', users.render);
 register('inventory', inventory.render);
 register('payments', payments.render);
 register('notifications', notifications.render);
-register('resilience', resilience.render);
 register('observability', observability.render);
 register('kubernetes', kubernetes.render);
 
