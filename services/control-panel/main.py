@@ -14,6 +14,7 @@ users/products/orders/payments/notifications was NOT implemented - none of
 the 5 microservices expose PUT/DELETE routes today, and adding them was
 out of scope for this pass. See README note in this service's directory.
 """
+import asyncio
 import os
 import urllib.parse
 import httpx
@@ -81,9 +82,9 @@ except Exception:
     _docker = None
 
 
-async def _get(client: httpx.AsyncClient, url: str):
+async def _get(client: httpx.AsyncClient, url: str, timeout: float = 5.0):
     try:
-        r = await client.get(url, timeout=5.0)
+        r = await client.get(url, timeout=timeout)
         return r.status_code, (r.json() if r.content else {})
     except Exception as e:
         return 0, {"error": str(e)}
@@ -91,12 +92,21 @@ async def _get(client: httpx.AsyncClient, url: str):
 
 @app.get("/api/health")
 async def health():
+    """Health of all 5 services, queried in parallel with a short timeout.
+
+    Checking services sequentially meant a single stopped container (whose
+    Docker DNS lookup times out rather than refusing the connection) would
+    stall the whole snapshot for its full timeout and skew the state of every
+    other node. Parallel + short timeout keeps each service's status accurate
+    and independent."""
     async with _client() as client:
-        out = {}
-        for key in SERVICES:
-            code, body = await _get(client, f"{service_base(key)}/health")
-            out[key] = {"up": code == 200, "detail": body}
-        return out
+
+        async def one(key: str):
+            code, body = await _get(client, f"{service_base(key)}/health", timeout=2.0)
+            return key, {"up": code == 200, "detail": body}
+
+        results = await asyncio.gather(*(one(key) for key in SERVICES))
+        return dict(results)
 
 
 @app.get("/api/counts")
@@ -104,11 +114,13 @@ async def counts():
     endpoints = {"order": "/orders/count", "user": "/users/count", "inventory": "/inventory/count",
                  "payment": "/payments/count", "notification": "/notifications/count"}
     async with _client() as client:
-        out = {}
-        for key, path in endpoints.items():
-            code, body = await _get(client, f"{service_base(key)}{path}")
-            out[key] = body.get("count") if code == 200 else None
-        return out
+
+        async def one(key: str):
+            code, body = await _get(client, f"{service_base(key)}{endpoints[key]}")
+            return key, body.get("count") if code == 200 else None
+
+        results = await asyncio.gather(*(one(key) for key in endpoints))
+        return dict(results)
 
 
 @app.get("/api/resources")
