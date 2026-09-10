@@ -12,7 +12,7 @@ export function render(view) {
     </div>
 
     <div class="grid">
-      ${card('Reintentos (order-service)',
+      ${card('REINTENTOS (CONFIGURACION)',
         'Parámetros de reintento de order-service cuando el sistema está en Modo Reintentos. Permite ajustar el número de reintentos y el tiempo de espera entre intentos.',
         `
         <div id="r-ret-notice" class="msg warn" style="display:none;margin-bottom:10px;padding:8px 12px;border-radius:8px;background:var(--warn-bg,#3a2f0f);color:var(--warn-fg,#f5a623);font-size:12px"></div>
@@ -166,6 +166,7 @@ export function render(view) {
   loadRetries();
   $('r-ret-save').addEventListener('click', async () => {
     const msg = $('r-ret-msg');
+    if ($('r-ret-save').disabled) return;
     try {
       const r = await API.setRetries({
         count: parseInt($('r-ret-count').value) || 0,
@@ -196,7 +197,7 @@ export function render(view) {
         delayEl.disabled = true;
         saveBtn.disabled = true;
         noticeEl.style.display = 'block';
-        noticeEl.innerHTML = '⚠️ El sistema no está en <b>Modo Reintentos</b>. Cambia al modo <b>Reintentos</b> desde la pestaña de <b>Inicio</b> para usar esta configuración.';
+        noticeEl.innerHTML = 'El sistema no está en <b>Modo Reintentos</b>. Cambia al modo <b>Reintentos</b> desde la pestaña de <b>Inicio</b> para usar esta configuración.';
       } else {
         countEl.disabled = false;
         delayEl.disabled = false;
