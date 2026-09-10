@@ -24,9 +24,6 @@ export function render(view) {
         'Los 6 objetivos que Prometheus está raspando (5 microservicios + otel-collector) y su salud. Si un servicio está caído, su objetivo pasa a "down".',
         table(['Job', 'Instancia', 'Salud'], [])
           .replace('<tbody></tbody>', '<tbody id="o-targets"></tbody>'))}
-      ${card('Alertas (reglas de Prometheus)',
-        'Reglas de alerta cargadas en Prometheus con su estado: inactive (ok), pending (condición cumplida, esperando umbral), firing (activa).',
-        '<div id="o-alerts" class="muted">cargando…</div>')}
     </div>
     ${card('Grafana — Resilencia Overview',
       'Dashboard de Grafana con 12 paneles de los 4 sectores de la propuesta: desempeño, resiliencia, recursos y observabilidad. Embebido en modo kiosk.',
@@ -38,17 +35,16 @@ export function render(view) {
 
   let diskCache = {};
   let grafanaBase = null;
+  let diskInFlight = false;
 
   const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
-  refreshAlerts();
-  const alertsTimer = setInterval(refreshAlerts, 1000);
   refreshDisk();
   const diskTimer = setInterval(refreshDisk, 30000);
   initGrafana();
   document.addEventListener('themechange', setGrafanaSrc);
 
-  const cleanup = () => { refreshCleanup(); clearInterval(alertsTimer); clearInterval(diskTimer); document.removeEventListener('themechange', setGrafanaSrc); };
+  const cleanup = () => { refreshCleanup(); clearInterval(diskTimer); document.removeEventListener('themechange', setGrafanaSrc); };
   return cleanup;
 
   async function refresh() {
@@ -130,28 +126,8 @@ export function render(view) {
     } catch (_) { $('o-targets').innerHTML = `<tr><td colspan="3" class="muted">no disponible</td></tr>`; }
   }
 
-  // Alerts poll on their own fast interval so they update immediately when a
-  // rule fires or clears, without waiting for the general metrics refresh.
-  let alertsInFlight = false;
-  async function refreshAlerts() {
-    if (alertsInFlight) return;
-    alertsInFlight = true;
-    try {
-      const a = await API.alerts();
-      const rules = a.groups || [];
-      $('o-alerts').innerHTML = rules.length
-        ? rules.map((r) => {
-            const color = r.state === 'firing' ? 'var(--red)' : r.state === 'pending' ? 'var(--yellow)' : 'var(--muted)';
-            const ann = r.annotations || {};
-            const desc = ann.summary || ann.description || '';
-            return `<div class="row" style="justify-content:flex-start;gap:10px"><span class="dot" style="background:${color}"></span><b>${esc(r.name)}</b> ${badge(r.state, r.state === 'firing' ? 'bad' : r.state === 'pending' ? 'warn' : 'ok')}<span class="muted">${esc(desc)}</span></div>`;
-          }).join('')
-        : '<span class="muted">sin reglas de alerta cargadas</span>';
-    } catch (_) { $('o-alerts').textContent = 'no disponible'; }
-    finally { alertsInFlight = false; }
-  }
 
-  let diskInFlight = false;
+
   async function refreshDisk() {
     if (diskInFlight) return;
     diskInFlight = true;
