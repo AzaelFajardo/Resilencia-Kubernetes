@@ -247,18 +247,19 @@ def service_action(service: str, action: str):
 
 @app.get("/api/latency")
 async def latency():
-    """Per-service latency percentiles (p50/p95/p99) from each service's own
-    Prometheus histogram (http_request_duration_seconds), not just
-    order-service's. Query params are URL-encoded inside PromQL; instance
-    labels are <service>:8000 per the scrape config."""
+    """Per-service latency percentiles (p50/p90/p95/p99/p100) from each
+    service's own Prometheus histogram (http_request_duration_seconds).
+    p100 is the approximate max (upper bound of the last histogram bucket)."""
     async with _client() as client:
         out = {}
         for key in SERVICES:
             quantiles = {}
             for q, expr in (
                 ("p50", f'histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
+                ("p90", f'histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
                 ("p95", f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
                 ("p99", f'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
+                ("p100", f'histogram_quantile(1.0, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
             ):
                 code, body = await _get(client, f"{prometheus_base()}/api/v1/query?query={expr}")
                 vals = body.get("data", {}).get("result", []) if code == 200 else []
