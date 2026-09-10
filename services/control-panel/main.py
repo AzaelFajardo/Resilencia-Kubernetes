@@ -129,17 +129,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="control-panel", lifespan=lifespan)
 
 
-@app.middleware("http")
-async def add_no_cache_headers(request: Request, call_next):
-    response = await call_next(request)
-    path = request.url.path
-    if path == "/" or path.startswith("/js") or path.startswith("/css"):
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
-
-
 def resolve_url(url: str) -> tuple[str, dict]:
     """Fast URL resolver with in-memory IP caching to bypass Docker DNS timeouts on stopped containers.
 

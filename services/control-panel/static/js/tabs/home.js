@@ -73,6 +73,7 @@ export function render(view) {
   let highlightTimer = null;
   let autoTimer = null;
   let animTimers = [];
+  let alertsInFlight = false;
   const healthMap = {};
 
   function node(key, hub) {
@@ -224,7 +225,6 @@ export function render(view) {
 
   // Alerts are polled on their own fast interval so they update immediately
   // when a rule fires or clears, without waiting for the general refresh.
-  let alertsInFlight = false;
   async function refreshAlerts() {
     if (alertsInFlight) return;
     alertsInFlight = true;

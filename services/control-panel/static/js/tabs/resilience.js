@@ -162,9 +162,6 @@ export function render(view) {
     } catch (_) {}
   }
 
-  return cleanup;erado ~500ms)</span></div>`;
-  }
-
   return cleanup;
 }
 
