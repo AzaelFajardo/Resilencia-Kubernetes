@@ -41,6 +41,39 @@ K8S_CERT = (
     os.getenv("K8S_CLIENT_KEY_FILE", "/kube/client.key"),
 )
 
+# Runtime target: "compose" talks to the local Docker Compose stack; "kubernetes"
+# routes the same service calls through the cluster's API server proxy (services
+# and Prometheus are reached via /api/v1/namespaces/default/services/.../proxy).
+RUNTIME_MODE = "compose"
+
+_NAMESPACE = "default"
+
+
+def service_base(key: str) -> str:
+    if RUNTIME_MODE == "kubernetes":
+        if not K8S_API_SERVER:
+            raise HTTPException(status_code=503, detail="Kubernetes not configured")
+        return f"{K8S_API_SERVER}/api/v1/namespaces/{_NAMESPACE}/services/{key}-service:8000/proxy"
+    return SERVICES[key]
+
+
+def prometheus_base() -> str:
+    if RUNTIME_MODE == "kubernetes":
+        if not K8S_API_SERVER:
+            raise HTTPException(status_code=503, detail="Kubernetes not configured")
+        return f"{K8S_API_SERVER}/api/v1/namespaces/{_NAMESPACE}/services/prometheus:9090/proxy"
+    return PROMETHEUS_URL
+
+
+def _client(**kwargs):
+    """HTTP client for service/Prometheus calls, with cluster certs in K8s mode."""
+    if RUNTIME_MODE == "kubernetes":
+        # verify=False: the cluster cert is issued for the minikube hostname, not
+        # for host.docker.internal (local dev cluster, not a real trust boundary).
+        return httpx.AsyncClient(cert=K8S_CERT, verify=False, **kwargs)
+    return httpx.AsyncClient(**kwargs)
+
+
 try:
     import docker as docker_sdk
     _docker = docker_sdk.from_env()
@@ -58,10 +91,10 @@ async def _get(client: httpx.AsyncClient, url: str):
 
 @app.get("/api/health")
 async def health():
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         out = {}
-        for key, base in SERVICES.items():
-            code, body = await _get(client, f"{base}/health")
+        for key in SERVICES:
+            code, body = await _get(client, f"{service_base(key)}/health")
             out[key] = {"up": code == 200, "detail": body}
         return out
 
@@ -70,10 +103,10 @@ async def health():
 async def counts():
     endpoints = {"order": "/orders/count", "user": "/users/count", "inventory": "/inventory/count",
                  "payment": "/payments/count", "notification": "/notifications/count"}
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         out = {}
         for key, path in endpoints.items():
-            code, body = await _get(client, f"{SERVICES[key]}{path}")
+            code, body = await _get(client, f"{service_base(key)}{path}")
             out[key] = body.get("count") if code == 200 else None
         return out
 
@@ -86,10 +119,10 @@ async def resources():
         "cpu": 'rate(process_cpu_seconds_total{job="microservices"}[1m])',
         "mem": 'process_resident_memory_bytes{job="microservices"}',
     }
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         results = {}
         for name, q in queries.items():
-            code, body = await _get(client, f"{PROMETHEUS_URL}/api/v1/query?query={q}")
+            code, body = await _get(client, f"{prometheus_base()}/api/v1/query?query={q}")
             results[name] = body.get("data", {}).get("result", []) if code == 200 else []
 
         by_instance: dict[str, dict] = {}
@@ -109,10 +142,10 @@ async def throughput():
         "rps": 'sum by (instance) (rate(http_requests_total{job="microservices"}[1m]))',
         "errors": 'sum by (instance) (rate(http_requests_total{job="microservices",status=~"5.."}[1m]))',
     }
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         results = {}
         for name, q in queries.items():
-            r = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": q}, timeout=5.0)
+            r = await client.get(f"{prometheus_base()}/api/v1/query", params={"query": q}, timeout=5.0)
             body = r.json() if r.status_code == 200 else {}
             results[name] = body.get("data", {}).get("result", [])
 
@@ -133,8 +166,8 @@ async def throughput():
 @app.get("/api/targets")
 async def targets():
     """Prometheus scrape targets and their health (up/down)."""
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{PROMETHEUS_URL}/api/v1/targets", timeout=5.0)
+    async with _client() as client:
+        r = await client.get(f"{prometheus_base()}/api/v1/targets", timeout=5.0)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail="Prometheus unreachable")
         data = r.json().get("data", {})
@@ -151,7 +184,38 @@ async def targets():
 
 @app.get("/api/config")
 async def config():
-    return {"grafana_url": GRAFANA_PUBLIC_URL, "k8s_available": bool(K8S_API_SERVER)}
+    return {
+        "grafana_url": GRAFANA_PUBLIC_URL,
+        "k8s_available": bool(K8S_API_SERVER),
+        "runtime_mode": RUNTIME_MODE,
+    }
+
+
+class RuntimeModeRequest(BaseModel):
+    mode: str
+
+
+@app.get("/api/runtime-mode")
+def get_runtime_mode():
+    return {
+        "mode": RUNTIME_MODE,
+        "k8s_configured": bool(K8S_API_SERVER),
+    }
+
+
+@app.post("/api/runtime-mode")
+def set_runtime_mode(req: RuntimeModeRequest):
+    global RUNTIME_MODE
+    mode = req.mode.strip().lower()
+    if mode not in ("compose", "kubernetes"):
+        raise HTTPException(status_code=400, detail="mode must be 'compose' or 'kubernetes'")
+    if mode == "kubernetes" and not K8S_API_SERVER:
+        raise HTTPException(
+            status_code=400,
+            detail="Kubernetes not configured (set K8S_API_SERVER and mount certs in k8s/certs/)",
+        )
+    RUNTIME_MODE = mode
+    return get_runtime_mode()
 
 
 @app.post("/api/services/{service}/{action}")
@@ -187,7 +251,7 @@ async def latency():
     Prometheus histogram (http_request_duration_seconds), not just
     order-service's. Query params are URL-encoded inside PromQL; instance
     labels are <service>:8000 per the scrape config."""
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         out = {}
         for key in SERVICES:
             quantiles = {}
@@ -196,7 +260,7 @@ async def latency():
                 ("p95", f'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
                 ("p99", f'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{{job="microservices",instance="{key}-service:8000"}}[5m])) by (le))'),
             ):
-                code, body = await _get(client, f"{PROMETHEUS_URL}/api/v1/query?query={expr}")
+                code, body = await _get(client, f"{prometheus_base()}/api/v1/query?query={expr}")
                 vals = body.get("data", {}).get("result", []) if code == 200 else []
                 quantiles[q] = round(float(vals[0]["value"][1]), 4) if vals else None
             out[key] = quantiles
@@ -281,8 +345,8 @@ async def kubernetes_status():
 async def alerts():
     """Prometheus alert rules and their current state (firing/pending/inactive)
     via the /api/v1/rules endpoint."""
-    async with httpx.AsyncClient() as client:
-        code, body = await _get(client, f"{PROMETHEUS_URL}/api/v1/rules")
+    async with _client() as client:
+        code, body = await _get(client, f"{prometheus_base()}/api/v1/rules")
         if code != 200:
             return {"groups": [], "error": "Prometheus unreachable"}
         out = []
@@ -302,8 +366,8 @@ async def alerts():
 
 @app.get("/api/circuit-breaker")
 async def circuit_breaker():
-    async with httpx.AsyncClient() as client:
-        code, body = await _get(client, f"{SERVICES['order']}/circuit-breaker/payment")
+    async with _client() as client:
+        code, body = await _get(client, f"{service_base('order')}/circuit-breaker/payment")
         if code != 200:
             raise HTTPException(status_code=502, detail="order-service unreachable")
         return body
@@ -320,8 +384,8 @@ class ChaosUpdate(BaseModel):
 async def get_chaos(service: str):
     if service not in SERVICES:
         raise HTTPException(status_code=400, detail=f"unknown service: {service}")
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{SERVICES[service]}/chaos/config", timeout=5.0)
+    async with _client() as client:
+        r = await client.get(f"{service_base(service)}/chaos/config", timeout=5.0)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=f"{service}-service unreachable")
         return r.json()
@@ -332,8 +396,8 @@ async def set_chaos(update: ChaosUpdate):
     if update.service not in SERVICES:
         raise HTTPException(status_code=400, detail=f"unknown service: {update.service}")
     payload = update.model_dump(exclude={"service"}, exclude_none=True)
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{SERVICES[update.service]}/chaos/config", json=payload, timeout=5.0)
+    async with _client() as client:
+        r = await client.post(f"{service_base(update.service)}/chaos/config", json=payload, timeout=5.0)
         return r.json()
 
 
@@ -348,8 +412,8 @@ async def recent(entity: str, limit: int = 10):
     if entity not in mapping:
         raise HTTPException(status_code=404, detail="unknown entity")
     svc, path = mapping[entity]
-    async with httpx.AsyncClient() as client:
-        code, body = await _get(client, f"{SERVICES[svc]}{path}?limit={limit}")
+    async with _client() as client:
+        code, body = await _get(client, f"{service_base(svc)}{path}?limit={limit}")
         if code != 200:
             raise HTTPException(status_code=502, detail=f"{svc}-service unreachable")
         return body
@@ -370,7 +434,7 @@ _ENTITY_MAP = {
 
 
 async def _proxy_json(method: str, url: str, body=None, timeout: float = 15.0):
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         r = await client.request(method, url, json=body, timeout=timeout)
     if r.status_code >= 400:
         detail = ""
@@ -405,7 +469,7 @@ async def list_entity(entity: str, offset: int = 0, limit: int = 20, search: str
         path = f"/inventory?{qs}"
     else:  # orders
         path = f"/orders?{qs}"
-    return await _proxy_json("GET", f"{SERVICES[svc]}{path}")
+    return await _proxy_json("GET", f"{service_base(svc)}{path}")
 
 
 @app.post("/api/entities/{entity}")
@@ -417,7 +481,7 @@ async def create_entity(entity: str, request: Request):
     path = {"users": "/users", "products": "/inventory", "orders": "/orders"}.get(entity)
     if path is None:
         raise HTTPException(status_code=400, detail=f"manual create not supported for {entity}")
-    return await _proxy_json("POST", f"{SERVICES[svc]}{path}", body=body, timeout=30.0)
+    return await _proxy_json("POST", f"{service_base(svc)}{path}", body=body, timeout=30.0)
 
 
 @app.patch("/api/entities/{entity}/{item_id}")
@@ -426,7 +490,7 @@ async def update_entity(entity: str, item_id: int, request: Request):
     if svc is None:
         raise HTTPException(status_code=404, detail="unknown entity")
     body = await request.json()
-    base = f"{SERVICES[svc]}"
+    base = f"{service_base(svc)}"
     if entity == "users":
         # UI sends raw profile fields; user-service expects {"data": {...}}.
         path = f"/users/{item_id}"
@@ -455,7 +519,7 @@ async def delete_entity(entity: str, item_id: int):
     svc = _ENTITY_MAP.get(entity)
     if svc is None:
         raise HTTPException(status_code=404, detail="unknown entity")
-    base = f"{SERVICES[svc]}"
+    base = f"{service_base(svc)}"
     path = {
         "users": f"/users/{item_id}",
         "products": f"/inventory/{item_id}",
@@ -468,8 +532,8 @@ async def delete_entity(entity: str, item_id: int):
 
 @app.get("/api/users/{user_id}/orders")
 async def user_orders(user_id: int, limit: int = 20):
-    async with httpx.AsyncClient() as client:
-        code, body = await _get(client, f"{SERVICES['user']}/users/{user_id}/orders?limit={limit}")
+    async with _client() as client:
+        code, body = await _get(client, f"{service_base('user')}/users/{user_id}/orders?limit={limit}")
         if code == 404:
             raise HTTPException(status_code=404, detail="user not found")
         if code != 200:
@@ -485,8 +549,8 @@ class OrderPlacement(BaseModel):
 
 @app.post("/api/orders")
 async def place_order(order: OrderPlacement):
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{SERVICES['order']}/orders", json=order.model_dump(), timeout=15.0)
+    async with _client() as client:
+        r = await client.post(f"{service_base('order')}/orders", json=order.model_dump(), timeout=15.0)
         return r.json()
 
 
@@ -496,8 +560,8 @@ async def generate(what: str):
     if what not in mapping:
         raise HTTPException(status_code=400, detail="must be 'users' or 'inventory'")
     svc, path = mapping[what]
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{SERVICES[svc]}{path}", timeout=30.0)
+    async with _client() as client:
+        r = await client.post(f"{service_base(svc)}{path}", timeout=30.0)
         return r.json()
 
 
@@ -509,8 +573,8 @@ async def generate_faker(what: str, count: int = 10):
         raise HTTPException(status_code=400, detail="must be 'users' or 'inventory'")
     svc, path = mapping[what]
     count = max(1, min(count, 100000))
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{SERVICES[svc]}{path}?count={count}", timeout=180.0)
+    async with _client() as client:
+        r = await client.post(f"{service_base(svc)}{path}?count={count}", timeout=180.0)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -528,9 +592,9 @@ class OrderGenerate(BaseModel):
 @app.post("/api/orders/generate")
 async def generate_orders(gen: OrderGenerate):
     """Bulk-generate orders through the real flow (optionally for one user)."""
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         r = await client.post(
-            f"{SERVICES['order']}/orders/generate", json=gen.model_dump(), timeout=600.0
+            f"{service_base('order')}/orders/generate", json=gen.model_dump(), timeout=600.0
         )
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
@@ -546,8 +610,8 @@ class SimulateStart(BaseModel):
 
 @app.get("/api/orders/simulate/status")
 async def simulate_status():
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{SERVICES['order']}/orders/simulate/status", timeout=5.0)
+    async with _client() as client:
+        r = await client.get(f"{service_base('order')}/orders/simulate/status", timeout=5.0)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail="order-service unreachable")
         return r.json()
@@ -555,9 +619,9 @@ async def simulate_status():
 
 @app.post("/api/orders/simulate/start")
 async def simulate_start(cfg: SimulateStart):
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         r = await client.post(
-            f"{SERVICES['order']}/orders/simulate/start", json=cfg.model_dump(), timeout=10.0
+            f"{service_base('order')}/orders/simulate/start", json=cfg.model_dump(), timeout=10.0
         )
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
@@ -566,8 +630,8 @@ async def simulate_start(cfg: SimulateStart):
 
 @app.post("/api/orders/simulate/stop")
 async def simulate_stop():
-    async with httpx.AsyncClient() as client:
-        r = await client.post(f"{SERVICES['order']}/orders/simulate/stop", timeout=10.0)
+    async with _client() as client:
+        r = await client.post(f"{service_base('order')}/orders/simulate/stop", timeout=10.0)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -581,8 +645,8 @@ class RetriesUpdate(BaseModel):
 
 @app.get("/api/resilience/retries")
 async def get_retries():
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{SERVICES['order']}/resilience/retries", timeout=5.0)
+    async with _client() as client:
+        r = await client.get(f"{service_base('order')}/resilience/retries", timeout=5.0)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail="order-service unreachable")
         return r.json()
@@ -590,9 +654,9 @@ async def get_retries():
 
 @app.post("/api/resilience/retries")
 async def set_retries(update: RetriesUpdate):
-    async with httpx.AsyncClient() as client:
+    async with _client() as client:
         r = await client.post(
-            f"{SERVICES['order']}/resilience/retries",
+            f"{service_base('order')}/resilience/retries",
             json=update.model_dump(exclude_none=True),
             timeout=5.0,
         )
