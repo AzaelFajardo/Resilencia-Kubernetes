@@ -17,21 +17,6 @@ const LABELS = {
 
 export function render(view) {
   view.innerHTML = `
-    ${card('Modo de resiliencia',
-      'Elige cómo se defiende el sistema ante fallos. · Baseline: sin protección (bajo carga se satura o se cae). · Reintentos: reintenta los pedidos que fallan. · Circuit breaker: deja de llamar a un servicio caído. · Kubernetes: usa el cluster (HPA + liveness probes).',
-      `
-      <div class="seg" id="mode-seg">
-        <button type="button" data-mode="baseline" data-tip="Sin resiliencia: ni reintentos ni circuit breaker. Bajo mucha carga el sistema se satura.">Baseline</button>
-        <button type="button" data-mode="retries" data-tip="Reintenta automáticamente los pedidos que fallan.">Reintentos</button>
-        <button type="button" data-mode="breaker" data-tip="Si un servicio falla varias veces, deja de llamarlo (evita cascadas de fallos).">Circuit breaker</button>
-        <button type="button" data-mode="kubernetes" data-tip="Cambia al cluster Kubernetes: usa HPA (autoescala) y liveness probes (reinicio automático).">Kubernetes</button>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <span class="muted" id="mode-state">cargando…</span>
-      </div>
-      `,
-      { full: true })}
-
     ${card('Flujo de servicios en tiempo real',
       'Así trabaja el sistema en conjunto: order-service orquesta a los otros 4 servicios. Cada salto muestra su latencia (campo timings) y su estado (verde = ok, rojo = fallo, gris punteado = no alcanzado). Con "Detener / Levantar" apagas y enciendes cada servicio de verdad (afecta a todo el stack).',
       `
@@ -53,7 +38,17 @@ export function render(view) {
         </div>
       </div>
       `,
-      { full: true })}
+      {
+        full: true,
+        headerExtra: `
+          <div class="seg" id="mode-seg">
+            <button type="button" data-mode="baseline" data-tip="Sin resiliencia: ni reintentos ni circuit breaker. Bajo mucha carga el sistema se satura.">Baseline</button>
+            <button type="button" data-mode="retries" data-tip="Reintenta automáticamente los pedidos que fallan.">Reintentos</button>
+            <button type="button" data-mode="breaker" data-tip="Si un servicio falla varias veces, deja de llamarlo (evita cascadas de fallos).">Circuit breaker</button>
+            <button type="button" data-mode="kubernetes" data-tip="Cambia al cluster Kubernetes: usa HPA (autoescala) y liveness probes (reinicio automático).">Kubernetes</button>
+          </div>
+        `
+      })}
 
     <div class="grid">
       ${card('Salud de servicios',
@@ -139,8 +134,11 @@ export function render(view) {
         : (runtime === 'compose' && b.dataset.mode === strategy);
       b.classList.toggle('active', isActive);
     });
-    const env = runtime === 'kubernetes' ? 'Kubernetes' : 'Compose';
-    $('mode-state').innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>`;
+    const stateEl = $('mode-state');
+    if (stateEl) {
+      const env = runtime === 'kubernetes' ? 'Kubernetes' : 'Compose';
+      stateEl.innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>`;
+    }
   }
 
   view.querySelectorAll('#mode-seg button').forEach((btn) => {

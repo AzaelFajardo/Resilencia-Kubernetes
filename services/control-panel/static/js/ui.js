@@ -20,9 +20,10 @@ export function help(tip) {
 
 export function card(title, tip, body, opts = {}) {
   const cls = opts.full ? 'card full' : opts.small ? 'card small' : 'card';
-  return `<section class="${cls}"><header class="card-h"><h2>${esc(title)}</h2>` +
+  const headerExtra = opts.headerExtra ? `<div class="card-h-extra">${opts.headerExtra}</div>` : '';
+  return `<section class="${cls}"><header class="card-h"><div class="card-h-title"><h2>${esc(title)}</h2>` +
     (tip ? help(tip) : '') +
-    `</header><div class="card-b">${body}</div></section>`;
+    `</div>${headerExtra}</header><div class="card-b">${body}</div></section>`;
 }
 
 export function table(head, rows) {
