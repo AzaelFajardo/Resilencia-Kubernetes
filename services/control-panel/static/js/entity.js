@@ -17,7 +17,7 @@ export function mountEntity(container, cfg) {
       <div class="row">
         <input id="e-search" placeholder="buscar por id, nombre, estado…" style="flex:1;min-width:150px">
         <button class="btn" id="e-search-btn">Buscar</button>
-        <button class="btn secondary" id="e-clear">Limpiar</button>
+        <button class="btn danger" id="e-clear">Limpiar</button>
         ${cfg.faker ? `
           <input id="e-faker-count" type="number" min="1" max="100000" value="100" title="cantidad de registros Faker">
           <button class="btn secondary" id="e-faker">Generar ${cfg.faker.label}</button>` : ''}
@@ -123,7 +123,18 @@ export function mountEntity(container, cfg) {
   }
 
   $('e-search-btn').addEventListener('click', () => { state.search = $('e-search').value.trim(); state.offset = 0; load(); });
-  $('e-clear').addEventListener('click', () => { $('e-search').value = ''; state.search = ''; state.offset = 0; load(); });
+  $('e-clear').addEventListener('click', async () => {
+    if (!(await confirmDialog(`¿Borrar TODOS los registros de ${cfg.label.toLowerCase()} de la base de datos? (cascada según FK de la BD)`))) return;
+    try {
+      await API.clearEntity(cfg.entity);
+      toast(`Se han borrado todos los registros de ${cfg.label.toLowerCase()}`, 'ok');
+      $('e-search').value = '';
+      state.search = '';
+      state.offset = 0;
+      $('e-detail').innerHTML = '';
+      load();
+    } catch (e) { toast('Error: ' + e.message, 'err'); }
+  });
   $('e-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); state.search = $('e-search').value.trim(); state.offset = 0; load(); } });
   $('e-prev').addEventListener('click', () => { state.offset = Math.max(0, state.offset - state.limit); load(); });
   $('e-next').addEventListener('click', () => { state.offset += state.limit; load(); });

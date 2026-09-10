@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select, or_, String
+from sqlalchemy import desc, func, select, or_, String, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, Order, OrderStatus, User, Product, engine, get_db, AsyncSessionLocal
@@ -688,6 +688,17 @@ async def update_order_status(
     await db.commit()
     await db.refresh(db_order)
     return serialize_order_record(db_order)
+
+
+@app.delete("/orders")
+async def clear_all_orders(db: AsyncSession = Depends(get_db)):
+    """Deletes ALL orders from the database."""
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(select(func.count()).select_from(Order))
+    count = result.scalar_one()
+    await db.execute(delete(Order))
+    await db.commit()
+    return {"message": "All orders deleted", "count": count}
 
 
 @app.delete("/orders/{order_id}")

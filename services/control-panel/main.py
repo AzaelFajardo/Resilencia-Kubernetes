@@ -669,6 +669,22 @@ async def delete_entity(entity: str, item_id: int):
     return await _proxy_json("DELETE", f"{base}{path}")
 
 
+@app.delete("/api/entities/{entity}")
+async def delete_all_entities(entity: str):
+    svc = _ENTITY_MAP.get(entity)
+    if svc is None:
+        raise HTTPException(status_code=404, detail="unknown entity")
+    base = f"{service_base(svc)}"
+    path = {
+        "users": "/users",
+        "products": "/inventory",
+        "orders": "/orders",
+        "payments": "/payments",
+        "notifications": "/notifications",
+    }[entity]
+    return await _proxy_json("DELETE", f"{base}{path}")
+
+
 @app.get("/api/users/{user_id}/orders")
 async def user_orders(user_id: int, limit: int = 20):
     async with _client() as client:

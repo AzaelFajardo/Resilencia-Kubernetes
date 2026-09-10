@@ -18,7 +18,7 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func, or_, text
+from sqlalchemy import desc, func, or_, text, delete
 from database import engine, Base, get_db, User, Order
 import faker_utils
 
@@ -466,6 +466,17 @@ async def update_user(
     await db.commit()
     await db.refresh(db_user)
     return build_customer_model(db_user.data)
+
+
+@app.delete("/users")
+async def clear_all_users(db: AsyncSession = Depends(get_db)):
+    """Deletes ALL customers from the database."""
+    await apply_chaos()
+    result = await db.execute(select(func.count()).select_from(User))
+    count = result.scalar_one()
+    await db.execute(delete(User))
+    await db.commit()
+    return {"message": "All customers deleted", "count": count}
 
 
 @app.delete("/users/{user_id}")

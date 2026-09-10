@@ -18,7 +18,7 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func, update, or_, text
+from sqlalchemy import desc, func, update, or_, text, delete
 from database import engine, Base, get_db, Product as DBProduct
 import faker_utils
 
@@ -563,6 +563,17 @@ async def update_product(
         security=build_security(request),
         item=product,
     )
+
+
+@app.delete("/inventory")
+async def clear_all_inventory(db: AsyncSession = Depends(get_db)):
+    """Deletes ALL products from the database."""
+    await apply_chaos()
+    result = await db.execute(select(func.count()).select_from(DBProduct))
+    count = result.scalar_one()
+    await db.execute(delete(DBProduct))
+    await db.commit()
+    return {"message": "All products deleted", "count": count}
 
 
 @app.delete("/inventory/{product_id}")

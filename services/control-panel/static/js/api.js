@@ -81,6 +81,7 @@ export const API = {
   createEntity: (entity, body) => post(`/api/entities/${entity}`, body),
   updateEntity: (entity, id, body) => patch(`/api/entities/${entity}/${id}`, body),
   deleteEntity: (entity, id) => del(`/api/entities/${entity}/${id}`),
+  clearEntity: (entity) => del(`/api/entities/${entity}`),
 
   faker: (what, count = 100) => post(`/api/faker/${what}?count=${count}`, null, 180000),
   generateOrders: (cfg) => post('/api/orders/generate', cfg, 600000),

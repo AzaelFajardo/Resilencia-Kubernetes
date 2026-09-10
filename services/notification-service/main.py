@@ -11,7 +11,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select, or_
+from sqlalchemy import delete, desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, NotificationRecord, engine, get_db
@@ -401,6 +401,14 @@ async def list_notifications(
     result = await db.execute(stmt)
     records = result.scalars().all()
     return [serialize_notification_record(record) for record in records]
+
+
+@app.delete("/notifications")
+async def delete_all_notifications(db: AsyncSession = Depends(get_db)) -> dict:
+    await apply_chaos_latency_and_timeout()
+    await db.execute(delete(NotificationRecord))
+    await db.commit()
+    return {"message": "All notifications deleted successfully"}
 
 
 @app.delete("/notifications/{notification_id}")

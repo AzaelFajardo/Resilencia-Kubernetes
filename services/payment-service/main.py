@@ -12,7 +12,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select, or_
+from sqlalchemy import delete, desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Base, PaymentRecord, engine, get_db
@@ -377,6 +377,14 @@ async def list_payments(
     result = await db.execute(stmt)
     records = result.scalars().all()
     return [serialize_payment_record(record) for record in records]
+
+
+@app.delete("/payments")
+async def delete_all_payments(db: AsyncSession = Depends(get_db)) -> dict:
+    await apply_chaos_latency_and_timeout()
+    await db.execute(delete(PaymentRecord))
+    await db.commit()
+    return {"message": "All payments deleted successfully"}
 
 
 @app.delete("/payments/{payment_id}")
