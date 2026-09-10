@@ -685,6 +685,26 @@ async def delete_all_entities(entity: str):
     return await _proxy_json("DELETE", f"{base}{path}")
 
 
+@app.delete("/api/clear-all")
+async def clear_all_entities():
+    entities = ["orders", "payments", "notifications", "users", "products"]
+    results = {}
+    for entity in entities:
+        svc = _ENTITY_MAP[entity]
+        path = {
+            "users": "/users",
+            "products": "/inventory",
+            "orders": "/orders",
+            "payments": "/payments",
+            "notifications": "/notifications",
+        }[entity]
+        try:
+            results[entity] = await _proxy_json("DELETE", f"{service_base(svc)}{path}")
+        except Exception as e:
+            results[entity] = {"error": str(e)}
+    return {"message": "All data cleared successfully", "details": results}
+
+
 @app.get("/api/users/{user_id}/orders")
 async def user_orders(user_id: int, limit: int = 20):
     async with _client() as client:

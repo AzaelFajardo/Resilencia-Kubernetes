@@ -24,6 +24,7 @@ export function render(view) {
         <button class="btn" id="f-run">Probar orden</button>
         <label><input type="checkbox" id="f-auto"> auto (cada 3s)</label>
         <span id="f-msg" class="muted"></span>
+        <button class="btn danger" id="f-clear-all" style="margin-left:auto">Limpiar TODAS las pestañas (BD)</button>
       </div>
       <div class="flow">
         <div class="node client">Cliente</div>
@@ -46,9 +47,13 @@ export function render(view) {
         table(['Servicio', 'Estado'], [])
           .replace('<tbody></tbody>', '<tbody id="home-health"></tbody>'))}
       ${card('Conteos de registros',
-        'Número total de registros persistidos en PostgreSQL para cada entidad.',
+        'Número total de registros persistidos en PostgreSQL para cada entidad. Usa "Limpiar TODAS las pestañas" para vaciar la base de datos.',
         table(['Entidad', 'Cantidad'], [])
-          .replace('<tbody></tbody>', '<tbody id="home-counts"></tbody>'))}
+          .replace('<tbody></tbody>', '<tbody id="home-counts"></tbody>') +
+        `<div class="row" style="justify-content:flex-end;margin-top:10px">
+          <button class="btn danger sm" id="home-clear-all-counts">Limpiar TODAS las pestañas</button>
+         </div>`
+      )}
       ${card('Circuit breaker (order → payment)',
         'Mecanismo de resiliencia: si payment-service falla 3 veces seguidas, order-service deja de llamarlo (OPEN) y responde rápido en lugar de esperar. Tras 15s prueba con una sola petición (HALF_OPEN) y se cierra si tiene éxito.',
         '<div id="home-cb" class="muted">cargando…</div>')}
@@ -84,7 +89,20 @@ export function render(view) {
   refreshAlerts();
   const alertsTimer = setInterval(refreshAlerts, 1000);
 
+  async function handleClearAll() {
+    if (!(await confirmDialog('¿Estás seguro de ELIMINAR TODOS LOS REGISTROS de TODAS las pestañas (Órdenes, Clientes, Inventario, Pagos, Notificaciones) de la BD? Esta acción es irreversible.'))) return;
+    try {
+      await API.clearAllData();
+      toast('Se han eliminado todos los registros de todas las pestañas de la BD', 'ok');
+      refresh();
+    } catch (e) {
+      toast('Error al limpiar datos: ' + e.message, 'err');
+    }
+  }
+
   $('f-run').addEventListener('click', runFlow);
+  $('f-clear-all')?.addEventListener('click', handleClearAll);
+  $('home-clear-all-counts')?.addEventListener('click', handleClearAll);
   $('f-auto').addEventListener('change', () => {
     if ($('f-auto').checked) { autoTimer = setInterval(runFlow, 3000); runFlow(); }
     else { clearInterval(autoTimer); autoTimer = null; }
