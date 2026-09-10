@@ -11,7 +11,12 @@ export function render(view) {
     <div class="grid">
       ${card('Latencia por servicio (p50 / p95 / p99)',
         'Percentiles de la duración de cada petición por servicio, sobre el histograma de Prometheus. p50 = mediana (la mitad tarda menos). p95 = el 95% tarda menos que esto. p99 = el 99% tarda menos (cola larga). Cuanto mayor sea la diferencia p50→p99, más variable es la latencia.',
-        table(['Servicio', 'p50 (s)', 'p95 (s)', 'p99 (s)'], [])
+        `<table class="tbl"><thead><tr>` +
+          `<th>Servicio</th>` +
+          `<th data-tip="Mediana: la mitad de las peticiones responde en menos de este tiempo. Es la latencia 'típica'.">p50 (s)</th>` +
+          `<th data-tip="El 95% de las peticiones responde en menos de este tiempo. Muestra qué tan mal van el 5% más lento.">p95 (s)</th>` +
+          `<th data-tip="El 99% de las peticiones responde en menos de este tiempo. Si p99 es mucho mayor que p50, hay una 'cola larga' (latencia inestable).">p99 (s)</th>` +
+        `</tr></thead><tbody id="o-lat"></tbody></table>`
           .replace('<tbody></tbody>', '<tbody id="o-lat"></tbody>'))}
       ${card('Throughput y errores por servicio',
         'Peticiones por segundo (req/s) de cada servicio y su tasa de error (5xx). Tasa de error = errores/s ÷ req/s. Recuerda: order/payment/notification devuelven HTTP 200 incluso en fallos de negocio, así que solo los 5xx (errores de transporte) cuentan aquí.',

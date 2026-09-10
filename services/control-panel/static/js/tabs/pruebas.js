@@ -265,7 +265,14 @@ export function render(view) {
     refreshStatus();
   });
 
-  refreshStatus();
+  refreshStatus().then((running) => {
+    if (running && !pollTimer) {
+      pollTimer = setInterval(async () => {
+        const running = await refreshStatus();
+        if (!running) { clearInterval(pollTimer); pollTimer = null; }
+      }, 2000);
+    }
+  });
 
   return () => { if (pollTimer) clearInterval(pollTimer); };
 }

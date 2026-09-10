@@ -302,6 +302,11 @@ input[type="number"] { width: 88px; }
 .flow .node.done-err { border-color: var(--red); background: var(--err-node-bg); }
 .flow .node.skipped { opacity: .45; border-style: dashed; }
 .flow .node.down { opacity: .6; border-color: var(--red); }
+.flow .node.retrying { border-color: var(--accent); background: var(--hub-bg); animation: retry-pulse 0.55s ease-in-out infinite; }
+@keyframes retry-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft, rgba(50, 108, 229, 0.35)); }
+  50% { box-shadow: 0 0 0 8px rgba(50, 108, 229, 0); }
+}
 .flow .branch { display: flex; flex-direction: row; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .flow .hop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .flow .lat { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 16px; font-weight: 600; }

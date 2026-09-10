@@ -727,7 +727,7 @@ async def place_order(order: OrderPlacement):
     target_url, headers = resolve_url(f"{service_base('order')}/orders")
     async with _client() as client:
         try:
-            r = await client.post(target_url, headers=headers, json=order.model_dump(), timeout=15.0)
+            r = await client.post(target_url, headers=headers, json=order.model_dump(), timeout=60.0)
             return r.json()
         except Exception as e:
             err_msg = str(e) or type(e).__name__

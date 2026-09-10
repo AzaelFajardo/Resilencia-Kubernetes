@@ -14,7 +14,7 @@ from typing import Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import desc, func, select, or_, String, delete
@@ -205,6 +205,7 @@ class OrderResponse(BaseModel):
     order: OrderDetails
     downstream: dict
     timings: dict = {}
+    attempts: dict = Field(default_factory=dict)
 
 
 class CountResponse(BaseModel):
@@ -470,6 +471,7 @@ async def call_service(
     url: str,
     retries: int = 0,
     json_data: Optional[dict] = None,
+    track: Optional[list] = None,
 ) -> httpx.Response:
     # Retries on transport exceptions AND on 5xx responses: httpx does not
     # raise for an error status code by default, so a chaos-simulated 503
@@ -487,14 +489,20 @@ async def call_service(
             response = await client.request(method, target_url, headers=headers, timeout=HTTP_TIMEOUT, json=json_data)
         except Exception as exc:
             last_error = exc
+            if track is not None:
+                track.append({"i": attempt + 1, "ok": False})
             if attempt < attempts - 1:
                 await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
             continue
 
         if response.status_code >= 500 and attempt < attempts - 1:
+            if track is not None:
+                track.append({"i": attempt + 1, "ok": False})
             await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
             continue
 
+        if track is not None:
+            track.append({"i": attempt + 1, "ok": response.status_code < 500})
         return response
 
     raise last_error
@@ -720,14 +728,21 @@ async def create_order(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> OrderResponse:
-    return await _process_order(req, request, db)
+    hop_attempts: dict = {}
+    result = await _process_order(req, request, db, hop_attempts)
+    if hasattr(result, "model_copy"):
+        return result.model_copy(update={"attempts": hop_attempts})
+    return result.copy(update={"attempts": hop_attempts})
 
 
 async def _process_order(
     req: OrderRequest,
     request: Optional[Request],
     db: AsyncSession,
+    hop_attempts: Optional[dict] = None,
 ) -> OrderResponse:
+    if hop_attempts is None:
+        hop_attempts = {}
     await apply_chaos_latency_and_timeout()
 
     metadata = build_metadata(request)
@@ -753,15 +768,18 @@ async def _process_order(
 
     async with httpx.AsyncClient() as client:
         t_user = time.time()
+        user_track: list = []
         try:
             user_response = await call_service(
                 client,
                 "GET",
                 f"{USER_SERVICE_URL}/users/{req.user_id}/validate",
                 RETRY_COUNT,
+                track=user_track,
             )
         except Exception as exc:
             logger.warning("User validation request failed: %s", exc)
+            hop_attempts["user"] = user_track
             return OrderResponse(
                 metadata=metadata,
                 security=security,
@@ -770,6 +788,7 @@ async def _process_order(
                 order=build_placeholder_order("service_error"),
                 downstream=downstream,
             )
+        hop_attempts["user"] = user_track
 
         if user_response.status_code != 200:
             return OrderResponse(
@@ -796,15 +815,18 @@ async def _process_order(
             )
 
         t_inventory = time.time()
+        inventory_track: list = []
         try:
             inventory_response = await call_service(
                 client,
                 "GET",
                 f"{INVENTORY_SERVICE_URL}/inventory/{req.product_id}/availability",
                 RETRY_COUNT,
+                track=inventory_track,
             )
         except Exception as exc:
             logger.warning("Inventory availability request failed: %s", exc)
+            hop_attempts["inventory"] = inventory_track
             return OrderResponse(
                 metadata=metadata,
                 security=security,
@@ -813,6 +835,7 @@ async def _process_order(
                 order=build_placeholder_order("service_error"),
                 downstream=downstream,
             )
+        hop_attempts["inventory"] = inventory_track
 
         if inventory_response.status_code != 200:
             return OrderResponse(
@@ -914,6 +937,7 @@ async def _process_order(
         customer_context = user_data.get("customer", {})
 
         t_payment = time.time()
+        pay_track: list = []
         try:
             async def do_payment():
                 # call_service()'s own retry loop only covers transport-level
@@ -955,20 +979,24 @@ async def _process_order(
                         )
                     except Exception as exc:
                         last_error = DownstreamServiceError(str(exc), {"status": "error", "message": str(exc)})
+                        pay_track.append({"i": attempt + 1, "ok": False})
                     else:
                         if response.status_code >= 400:
                             last_error = DownstreamServiceError(
                                 f"Payment service returned status {response.status_code}",
                                 {"status": "error", "message": response.text},
                             )
+                            pay_track.append({"i": attempt + 1, "ok": False})
                         else:
                             payload = response.json()
                             if payload.get("status") == "success":
+                                pay_track.append({"i": attempt + 1, "ok": True})
                                 return payload
                             last_error = DownstreamServiceError(
                                 payload.get("message", "Payment was rejected"),
                                 payload,
                             )
+                            pay_track.append({"i": attempt + 1, "ok": False})
 
                     if attempt < attempts - 1:
                         await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
@@ -979,6 +1007,7 @@ async def _process_order(
             downstream["payment"] = payment_data
         except CircuitBreakerError:
             downstream["payment"] = {"status": "error", "message": "circuit_breaker_open"}
+            pay_track.append({"i": 0, "ok": False, "reason": "circuit_breaker_open"})
             payment_error = "Payment circuit breaker is OPEN"
         except DownstreamServiceError as exc:
             downstream["payment"] = exc.payload or {"status": "error", "message": str(exc)}
@@ -989,6 +1018,7 @@ async def _process_order(
         else:
             payment_error = None
 
+        hop_attempts["payment"] = pay_track
         timings["payment_ms"] = int((time.time() - t_payment) * 1000)
 
         if payment_error is not None:
@@ -1061,6 +1091,7 @@ async def _process_order(
         notification_warning = None
 
         t_notification = time.time()
+        notif_track: list = []
         try:
             # Same shape as do_payment(): notification-service's simulated
             # failure is a normal 200 with {"status": "error"}, which
@@ -1089,21 +1120,25 @@ async def _process_order(
                     )
                 except Exception as exc:
                     last_notification_error = DownstreamServiceError(str(exc), {"status": "error", "message": str(exc)})
+                    notif_track.append({"i": attempt + 1, "ok": False})
                 else:
                     if notification_response.status_code >= 400:
                         last_notification_error = DownstreamServiceError(
                             f"Notification service returned status {notification_response.status_code}",
                             {"status": "error", "message": notification_response.text},
                         )
+                        notif_track.append({"i": attempt + 1, "ok": False})
                     else:
                         payload = notification_response.json()
                         if payload.get("status") == "sent":
+                            notif_track.append({"i": attempt + 1, "ok": True})
                             notification_data = payload
                             break
                         last_notification_error = DownstreamServiceError(
                             payload.get("message", "Notification was not delivered"),
                             payload,
                         )
+                        notif_track.append({"i": attempt + 1, "ok": False})
 
                 if attempt < attempts - 1:
                     await asyncio.sleep(RETRY_DELAY_MS / 1000.0)
@@ -1119,6 +1154,7 @@ async def _process_order(
             downstream["notification"] = {"status": "error", "message": str(exc)}
             notification_warning = str(exc)
 
+        hop_attempts["notification"] = notif_track
         timings["notification_ms"] = int((time.time() - t_notification) * 1000)
 
         if notification_warning is not None:

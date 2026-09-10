@@ -18,7 +18,7 @@ const LABELS = {
 export function render(view) {
   view.innerHTML = `
     ${card('Flujo de servicios en tiempo real',
-      'Así trabaja el sistema en conjunto: order-service orquesta a los otros 4 servicios. Cada salto muestra su latencia (campo timings) y su estado (verde = ok, rojo = fallo, gris punteado = no alcanzado). Con "Detener / Levantar" apagas y enciendes cada servicio de verdad (afecta a todo el stack).',
+      'Así trabaja el sistema en conjunto: order-service orquesta a los otros 4 servicios. Cada salto muestra su latencia (campo timings) y su estado (verde = ok, rojo = fallo, gris punteado = no alcanzado). En Modo Reintentos, si un salto falla order-service lo reintenta (reintentos × espera ms configurados en Pruebas): el nodo parpadea mostrando "intento i/N" y al final verás cuántos intentos necesitó. Con "Detener / Levantar" apagas y enciendes cada servicio de verdad (afecta a todo el stack).',
       `
       <div class="row">
         <button class="btn" id="f-run">Probar orden</button>
@@ -84,6 +84,7 @@ export function render(view) {
   let autoTimer = null;
   let animTimers = [];
   let alertsInFlight = false;
+  let retryDelay = 400;
   const healthMap = {};
 
   function node(key, hub) {
@@ -96,6 +97,7 @@ export function render(view) {
 
   const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
+  loadRetryConfig();
   refreshAlerts();
   const alertsTimer = setInterval(refreshAlerts, 1000);
 
@@ -186,9 +188,18 @@ export function render(view) {
     });
   });
 
+  async function loadRetryConfig() {
+    try {
+      const rc = await API.getRetries();
+      if (rc.delay_ms > 0) retryDelay = rc.delay_ms;
+    } catch (_) {}
+  }
+
   async function runFlow() {
     const msg = $('f-msg');
     try {
+      setFlowClass('order', 'pending');
+      HOPS.forEach((k) => { setFlowClass(k, 'pending'); $('f-' + k + '-lat').textContent = '…'; });
       const pid = await pickInStockProduct();
       if (pid == null) { msg.textContent = 'sin productos con stock (genera inventario)'; return; }
       const r = await API.placeOrder(1, pid, 1);
@@ -217,22 +228,41 @@ export function render(view) {
     animTimers.forEach(clearTimeout);
     animTimers = [];
     setFlowClass('order', 'done-ok');
-    HOPS.forEach((k) => { setFlowClass(k, 'pending'); $('f-' + k + '-lat').textContent = '—'; });
+    HOPS.forEach((k) => { setFlowClass(k, 'pending'); $('f-' + k + '-lat').textContent = '…'; });
+    const attempts = (r && r.attempts) || {};
     const t = r.timings || {};
+    const step = Math.max(retryDelay, 350);
     HOPS.forEach((k, i) => {
-      animTimers.push(setTimeout(() => {
-        const st = hopState(r, k);
-        setFlowClass(k, st === 'ok' ? 'done-ok' : st === 'err' ? 'done-err' : 'skipped');
-        const lat = t[k + '_ms'];
-        $('f-' + k + '-lat').textContent = st === 'skip' ? 'no ejecutado' : (lat != null ? lat + ' ms' : '—');
-      }, 450 + i * 500));
+      const list = attempts[k] || [];
+      const n = Math.max(list.length, 1);
+      let acc = 450 + i * (n > 1 ? 250 : 500);
+      for (let x = 0; x < n; x++) {
+        const isLast = x === n - 1;
+        animTimers.push(setTimeout(() => {
+          if (n > 1 && !isLast) {
+            setFlowClass(k, 'retrying');
+            $('f-' + k + '-lat').textContent = 'intento ' + (x + 1) + '/' + n;
+          } else {
+            const st = hopState(r, k);
+            const lastOk = list.length ? list[list.length - 1].ok : true;
+            const cls = (st === 'skip' && n > 1 && !lastOk)
+              ? 'done-err'
+              : st === 'ok' ? 'done-ok' : st === 'err' ? 'done-err' : 'skipped';
+            setFlowClass(k, cls);
+            const lat = t[k + '_ms'];
+            const extra = n > 1 ? ' · ×' + n + ' intentos' : '';
+            $('f-' + k + '-lat').textContent = (st === 'skip' ? 'no ejecutado' : (lat != null ? lat + ' ms' : '—')) + extra;
+          }
+        }, acc));
+        acc += step;
+      }
     });
   }
 
   function setFlowClass(key, cls) {
     const n = $('f-' + key);
     if (!n) return;
-    n.classList.remove('pending', 'done-ok', 'done-err', 'skipped');
+    n.classList.remove('pending', 'done-ok', 'done-err', 'skipped', 'retrying', 'down');
     if (cls) n.classList.add(cls);
   }
 
@@ -247,9 +277,14 @@ export function render(view) {
   }
 
   async function pickInStockProduct() {
-    const prods = await API.listEntities('products', 0, 50);
-    const inStock = (Array.isArray(prods) ? prods : []).filter((p) => (p.quantity ?? 0) > 0);
-    return inStock.length ? inStock[0].product_id : null;
+    try {
+      const prods = await API.listEntities('products', 0, 50);
+      const inStock = (Array.isArray(prods) ? prods : []).filter((p) => (p.quantity ?? 0) > 0);
+      if (inStock.length) return inStock[0].product_id;
+    } catch (_) {}
+    // Fallback: si inventory-service está caído no se puede consultar el stock;
+    // usamos el producto 1 para que la orden llegue a reintentar igualmente.
+    return 1;
   }
 
   async function refresh() {
@@ -316,7 +351,7 @@ export function render(view) {
         // When healthy, clear any stale flow state (e.g. "skipped"/"done-err"
         // left by an order that failed while a dependency was down) so the
         // node doesn't stay looking "off" after the service recovers.
-        nodeEl.classList.remove('down', 'pending', 'done-ok', 'done-err', 'skipped');
+        nodeEl.classList.remove('down', 'pending', 'done-ok', 'done-err', 'skipped', 'retrying');
       } else {
         dotEl.className = 'dot down';
         if (btn) { btn.textContent = 'Levantar'; btn.dataset.action = 'start'; }

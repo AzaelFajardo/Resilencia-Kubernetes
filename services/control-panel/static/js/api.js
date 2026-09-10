@@ -69,7 +69,7 @@ export const API = {
     return out;
   },
 
-  placeOrder: (user_id, product_id, quantity) => post('/api/orders', { user_id, product_id, quantity }),
+  placeOrder: (user_id, product_id, quantity) => post('/api/orders', { user_id, product_id, quantity }, 60000),
   userOrders: (id, limit = 20) => api(`/api/users/${id}/orders?limit=${limit}`),
   generate: (what) => post(`/api/generate/${what}`),
   recent: (entity, limit = 10) => api(`/api/recent/${entity}?limit=${limit}`),
