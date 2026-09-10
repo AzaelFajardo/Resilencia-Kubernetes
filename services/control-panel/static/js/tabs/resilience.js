@@ -10,10 +10,6 @@ const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
 export function render(view) {
   view.innerHTML = `
     <div class="grid">
-      ${card('Circuit breaker (order → payment)',
-        'El breaker protege a payment-service: si falla 3 veces seguidas pasa a OPEN y order-service deja de llamarlo (fallo rápido). Tras 15s entra en HALF_OPEN y deja pasar una única petición de prueba; si tiene éxito vuelve a CLOSED, si falla vuelve a OPEN.',
-        '<div id="r-cb" class="muted">cargando…</div>')}
-
       ${card('Reintentos (order-service)',
         'Reintentos automáticos de order-service hacia los servicios downstream cuando fallan. Actívalos para que una petición se reintente N veces con una espera entre intentos. Afecta a las llamadas de usuario, inventario, pago y notificación.',
         `
@@ -69,20 +65,6 @@ export function render(view) {
   `;
 
   const $ = (id) => view.querySelector('#' + id);
-
-  // ---- Circuit breaker (live) ----
-  const refreshCleanup = mountRefreshControl(view, { onRefresh: refreshCB, initial: 3 });
-  refreshCB();
-  const cleanup = () => refreshCleanup();
-
-  async function refreshCB() {
-    try {
-      const cb = await API.circuitBreaker();
-      $('r-cb').innerHTML =
-        `<div style="margin-bottom:8px">${badge(cb.state, cb.state)}</div>` +
-        `<div class="muted">fallos: ${cb.failures}/${cb.failure_threshold} · umbral: ${cb.failure_threshold} · recuperación: ${cb.recovery_timeout}s</div>`;
-    } catch (_) { $('r-cb').textContent = 'no disponible'; }
-  }
 
   // ---- Chaos por servicio (botones de selección) ----
   let selectedSvc = 'order';
@@ -162,7 +144,7 @@ export function render(view) {
     } catch (_) {}
   }
 
-  return cleanup;
+  return null;
 }
 
 function readChaos(frEl, lmEl, trEl) {
