@@ -123,6 +123,12 @@ class RetriesConfig(BaseModel):
     delay_ms: Optional[int] = None
 
 
+class CircuitBreakerConfig(BaseModel):
+    enabled: Optional[bool] = None
+    failure_threshold: Optional[int] = None
+    recovery_timeout: Optional[float] = None
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -193,6 +199,7 @@ cb_state_gauge = Gauge(
 class AsyncCircuitBreaker:
     def __init__(self, service_name: str, failure_threshold: int = 3, recovery_timeout: float = 10.0):
         self.service_name = service_name
+        self.enabled = True
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.state = CircuitBreakerState.CLOSED
@@ -206,7 +213,23 @@ class AsyncCircuitBreaker:
         self._lock = asyncio.Lock()
         self._update_metric()
 
+    def configure(self, enabled=None, failure_threshold=None, recovery_timeout=None):
+        """Reconfigure the breaker at runtime and reset it to CLOSED."""
+        if enabled is not None:
+            self.enabled = bool(enabled)
+        if failure_threshold is not None:
+            self.failure_threshold = int(failure_threshold)
+        if recovery_timeout is not None:
+            self.recovery_timeout = float(recovery_timeout)
+        self.state = CircuitBreakerState.CLOSED
+        self.failures = 0
+        self.last_failure_time = 0.0
+        self._update_metric()
+
     def _update_metric(self):
+        if not self.enabled:
+            cb_state_gauge.labels(service=self.service_name).set(0)
+            return
         value = 0
         if self.state == CircuitBreakerState.HALF_OPEN:
             value = 1
@@ -215,6 +238,12 @@ class AsyncCircuitBreaker:
         cb_state_gauge.labels(service=self.service_name).set(value)
 
     async def call(self, func, *args, **kwargs):
+        if not self.enabled:
+            # Circuit breaker disabled: call the downstream directly with no
+            # protection - failures reach the service every time (no fail-fast
+            # and no recovery state).
+            return await func(*args, **kwargs)
+
         is_probe = False
 
         async with self._lock:
@@ -485,6 +514,7 @@ def health() -> HealthResponse:
 def get_payment_cb_state():
     return {
         "state": payment_cb.state.value,
+        "enabled": payment_cb.enabled,
         "failures": payment_cb.failures,
         "failure_threshold": payment_cb.failure_threshold,
         "recovery_timeout": payment_cb.recovery_timeout,
@@ -1254,6 +1284,33 @@ def set_retries_config(config: RetriesConfig):
         "enabled": RETRY_ENABLED,
         "count": RETRY_COUNT,
         "delay_ms": RETRY_DELAY_MS,
+    }
+
+
+@app.get("/resilience/circuit-breaker")
+def get_circuit_breaker_config():
+    return {
+        "enabled": payment_cb.enabled,
+        "failure_threshold": payment_cb.failure_threshold,
+        "recovery_timeout": payment_cb.recovery_timeout,
+        "state": payment_cb.state.value,
+        "failures": payment_cb.failures,
+    }
+
+
+@app.post("/resilience/circuit-breaker")
+def set_circuit_breaker_config(config: CircuitBreakerConfig):
+    payment_cb.configure(
+        enabled=config.enabled,
+        failure_threshold=config.failure_threshold,
+        recovery_timeout=config.recovery_timeout,
+    )
+    return {
+        "enabled": payment_cb.enabled,
+        "failure_threshold": payment_cb.failure_threshold,
+        "recovery_timeout": payment_cb.recovery_timeout,
+        "state": payment_cb.state.value,
+        "failures": payment_cb.failures,
     }
 
 
