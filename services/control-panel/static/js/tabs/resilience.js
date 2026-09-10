@@ -44,7 +44,10 @@ export function render(view) {
           </label>
           <button class="btn">Aplicar</button>
         </form>
-        <div class="msg" id="c-msg"      ${card('Caos global (todo el sistema)',
+        <div class="msg" id="c-msg"></div>
+      `)}
+
+      ${card('Caos global (todo el sistema)',
         'Inyecta las mismas variables de caos en los 5 servicios a la vez, para estresar el sistema completo. Pasa el cursor por cada campo para ver qué significa y sus unidades.',
         `
         <form id="g-form" class="row">
