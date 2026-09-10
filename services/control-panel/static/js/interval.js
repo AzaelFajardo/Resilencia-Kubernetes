@@ -7,6 +7,7 @@ export function mountRefreshControl(container, { onRefresh, initial = 5 } = {}) 
 
   const wrap = document.createElement('div');
   wrap.className = 'refresh-ctl';
+  wrap.style.display = 'none';
   wrap.innerHTML = `
     <span class="lbl">refresco</span>
     <input type="number" min="1" step="1" value="${seconds}" data-tip="Intervalo de auto-refresco de esta pestaña, en segundos (mínimo 1).">

@@ -44,10 +44,7 @@ export function render(view) {
           </label>
           <button class="btn">Aplicar</button>
         </form>
-        <div class="msg" id="c-msg"></div>
-      `)}
-
-      ${card('Caos global (todo el sistema)',
+        <div class="msg" id="c-msg"      ${card('Caos global (todo el sistema)',
         'Inyecta las mismas variables de caos en los 5 servicios a la vez, para estresar el sistema completo. Pasa el cursor por cada campo para ver qué significa y sus unidades.',
         `
         <form id="g-form" class="row">
@@ -65,36 +62,7 @@ export function render(view) {
         </form>
         <div class="msg" id="g-msg"></div>
       `)}
-
-      ${card('Presets rápidos',
-        'Configuraciones de fallo de un clic para no escribir los valores a mano.',
-        `
-        <div class="row">
-          <button class="btn secondary sm" data-preset="payment-fail">Romper el pago (100%)</button>
-          <button class="btn secondary sm" data-preset="inventory-latency">Inventario lento (+500 ms)</button>
-          <button class="btn secondary sm" data-preset="order-timeout">Pedidos con timeout (20%)</button>
-          <button class="btn secondary sm" data-preset="user-fail">Clientes con fallos (50%)</button>
-          <button class="btn danger sm" data-preset="reset">Restablecer todo</button>
-        </div>
-        <div class="msg" id="r-preset-msg"></div>
-      `)}
     </div>
-
-    ${card('Escenarios de prueba',
-      'Ejecuta un escenario guiado de resiliencia y observa el resultado: inyecta el fallo, coloca órdenes reales y restaura el estado al final.',
-      `
-      <div class="row">
-        <select id="r-scen">
-          <option value="breaker">Pago siempre falla → circuit breaker</option>
-          <option value="retries">Pago falla a veces → reintentos</option>
-          <option value="latency">Inventario lento → latencia</option>
-        </select>
-        <button class="btn" id="r-run">Probar escenario</button>
-        <span id="r-run-state" class="muted"></span>
-      </div>
-      <div id="r-results"></div>
-      `,
-      { full: true })}
   `;
 
   const $ = (id) => view.querySelector('#' + id);
@@ -191,109 +159,7 @@ export function render(view) {
     } catch (_) {}
   }
 
-  // ---- Presets ----
-  const presets = {
-    'payment-fail': () => API.chaosSet('payment', { FAILURE_RATE: 1.0 }),
-    'inventory-latency': () => API.chaosSet('inventory', { LATENCY_MS: 500 }),
-    'order-timeout': () => API.chaosSet('order', { TIMEOUT_RATE: 0.2 }),
-    'user-fail': () => API.chaosSet('user', { FAILURE_RATE: 0.5 }),
-    'reset': () => API.chaosResetAll(),
-  };
-  view.querySelectorAll('[data-preset]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const m = $('r-preset-msg');
-      try { await presets[btn.dataset.preset](); m.className = 'msg ok'; m.textContent = 'aplicado'; }
-      catch (e) { m.className = 'msg err'; m.textContent = e.message; }
-    });
-  });
-
-  // ---- Scenarios ----
-  $('r-run').addEventListener('click', () => runScenario($('r-scen').value));
-
-  async function runScenario(kind) {
-    const state = $('r-run-state');
-    const results = $('r-results');
-    const btn = $('r-run');
-    btn.disabled = true;
-    state.textContent = 'ejecutando…';
-    results.innerHTML = '<div class="loading"><span class="spin"></span> ejecutando…</div>';
-    try {
-      const productId = await pickInStockProduct();
-      if (productId == null) {
-        results.innerHTML = '<div class="msg err">No hay productos con stock. Genera inventario (pestaña Inventario) antes de ejecutar un escenario.</div>';
-        return;
-      }
-      let out;
-      if (kind === 'breaker') out = await scenarioBreaker(1, productId);
-      else if (kind === 'retries') out = await scenarioRetries(1, productId);
-      else out = await scenarioLatency(1, productId);
-      results.innerHTML = out;
-    } catch (e) {
-      results.innerHTML = '<div class="msg err">Error: ' + esc(e.message) + '</div>';
-    } finally {
-      state.textContent = 'listo';
-      btn.disabled = false;
-      refreshCB();
-    }
-  }
-
-  async function pickInStockProduct() {
-    const prods = await API.listEntities('products', 0, 50);
-    const inStock = (Array.isArray(prods) ? prods : []).filter((p) => (p.quantity ?? 0) > 0);
-    return inStock.length ? inStock[0].product_id : null;
-  }
-
-  async function scenarioBreaker(uid, pid) {
-    await API.chaosResetAll();
-    await API.chaosSet('payment', { FAILURE_RATE: 1.0 });
-    const rows = [];
-    let fastFail = 0, declined = 0;
-    for (let i = 0; i < 6; i++) {
-      const r = await API.placeOrder(uid, pid, 1);
-      const pm = (r.downstream && r.downstream.payment && r.downstream.payment.message) || r.message || '';
-      if (pm === 'circuit_breaker_open') fastFail++;
-      else declined++;
-      rows.push([i + 1, r.status, pm]);
-    }
-    const cb = await API.circuitBreaker();
-    await API.chaosResetAll();
-    return `<p class="muted">6 órdenes con payment al 100% de fallo. El breaker se abre tras 3 fallos y rechaza rápido el resto (sin llegar a payment-service).</p>
-      ${table(['#', 'Estado', 'Resultado'], rows)}
-      <div class="row" style="margin-top:8px">
-        <b>Rechazadas rápido (breaker OPEN): ${fastFail}</b>
-        <span class="muted">· llegaron a payment (declined): ${declined}</span>
-        <span class="muted">· estado final del breaker: ${badge(cb.state, cb.state)}</span>
-      </div>`;
-  }
-
-  async function scenarioRetries(uid, pid) {
-    await API.chaosResetAll();
-    await API.setRetries({ enabled: false });
-    await API.chaosSet('payment', { FAILURE_RATE: 0.3 });
-    await API.setRetries({ enabled: true, count: 3, delay_ms: 100 });
-    let ok = 0, fail = 0;
-    for (let i = 0; i < 10; i++) {
-      const r = await API.placeOrder(uid, pid, 1);
-      if (r.status === 'success') ok++; else fail++;
-    }
-    await API.setRetries({ enabled: false });
-    await API.chaosResetAll();
-    return `<p class="muted">10 órdenes con payment al 30% de fallo y reintentos activados (3 intentos). Sin reintentos el éxito esperado sería ~70%; con reintentos debe ser mucho mayor.</p>
-      <div class="row"><b>Éxito: ${ok}/10</b> <span class="muted">· fallos: ${fail}</span></div>`;
-  }
-
-  async function scenarioLatency(uid, pid) {
-    await API.chaosResetAll();
-    await API.chaosSet('inventory', { LATENCY_MS: 500 });
-    const times = [];
-    for (let i = 0; i < 3; i++) {
-      const r = await API.placeOrder(uid, pid, 1);
-      if (r.timings && r.timings.inventory_ms != null) times.push(r.timings.inventory_ms);
-    }
-    await API.chaosResetAll();
-    const avg = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
-    return `<p class="muted">3 órdenes con 500ms de latencia artificial en inventory-service. La latencia por salto sale del campo timings de la respuesta.</p>
-      <div class="row"><b>Latencia media de inventory: ${avg} ms</b> <span class="muted">(esperado ~500ms)</span></div>`;
+  return cleanup;erado ~500ms)</span></div>`;
   }
 
   return cleanup;

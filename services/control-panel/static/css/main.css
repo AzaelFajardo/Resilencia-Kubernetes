@@ -96,7 +96,7 @@ body {
 .links a { color: var(--muted); text-decoration: none; margin-right: 14px; font-size: 13px; font-weight: 600; }
 .links a:hover { color: var(--accent); }
 
-.refresh-ctl { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; }
+.refresh-ctl { display: none !important; }
 .refresh-ctl .lbl { color: var(--muted); font-size: 12px; font-weight: 600; }
 .refresh-ctl input { width: 56px; padding: 6px 7px; }
 
