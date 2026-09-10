@@ -666,4 +666,30 @@ async def set_retries(update: RetriesUpdate):
         return r.json()
 
 
+class ModeRequest(BaseModel):
+    mode: str
+
+
+@app.get("/api/resilience/mode")
+async def get_mode():
+    async with _client() as client:
+        r = await client.get(f"{service_base('order')}/resilience/mode", timeout=5.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="order-service unreachable")
+        return r.json()
+
+
+@app.post("/api/resilience/mode")
+async def set_mode(req: ModeRequest):
+    async with _client() as client:
+        r = await client.post(
+            f"{service_base('order')}/resilience/mode",
+            json=req.model_dump(),
+            timeout=5.0,
+        )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+
+
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

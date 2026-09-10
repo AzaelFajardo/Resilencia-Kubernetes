@@ -77,6 +77,10 @@ export const API = {
   simulateStop: () => post('/api/orders/simulate/stop'),
   getRetries: () => api('/api/resilience/retries'),
   setRetries: (cfg) => post('/api/resilience/retries', cfg),
+  getMode: () => api('/api/resilience/mode'),
+  setMode: (mode) => post('/api/resilience/mode', { mode }),
+  getRuntimeMode: () => api('/api/runtime-mode'),
+  setRuntimeMode: (mode) => post('/api/runtime-mode', { mode }),
 };
 
 export { api, post, patch, del };
