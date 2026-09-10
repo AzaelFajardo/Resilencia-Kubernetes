@@ -78,8 +78,14 @@ def _client(**kwargs):
 try:
     import docker as docker_sdk
     _docker = docker_sdk.from_env()
+    # Separate client for the slow /api/disk path. The Docker SDK's underlying
+    # requests.Session is not 100% thread-safe; sharing one client across the
+    # blocking stop/start and disk endpoints (both run in the threadpool) could
+    # interleave and hang. A dedicated client keeps the sessions isolated.
+    _docker_disk = docker_sdk.from_env()
 except Exception:
     _docker = None
+    _docker_disk = None
 
 
 async def _get(client: httpx.AsyncClient, url: str, timeout: float = 5.0):
@@ -289,13 +295,13 @@ def disk():
     Sync (not async) on purpose: the Docker SDK calls are blocking, so
     FastAPI runs this endpoint in a worker thread instead of blocking the
     event loop (which would stall every other /api/* request)."""
-    if _docker is None:
+    if _docker_disk is None:
         raise HTTPException(status_code=503, detail="Docker socket not available")
     out = {}
     for svc in SERVICES:
         name = f"resilencia-kubernetes-{svc}-service-1"
         try:
-            c = _docker.containers.get(name)
+            c = _docker_disk.containers.get(name)
             stats = c.stats(stream=False)
             write_bytes = 0
             entries = (stats.get("blkio_stats", {}) or {}).get("io_service_bytes_recursive") or []

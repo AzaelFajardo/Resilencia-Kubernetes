@@ -86,7 +86,10 @@ export function render(view) {
 
   // Alerts poll on their own fast interval so they update immediately when a
   // rule fires or clears, without waiting for the general metrics refresh.
+  let alertsInFlight = false;
   async function refreshAlerts() {
+    if (alertsInFlight) return;
+    alertsInFlight = true;
     try {
       const a = await API.alerts();
       const rules = a.groups || [];
@@ -99,13 +102,19 @@ export function render(view) {
           }).join('')
         : '<span class="muted">sin reglas de alerta cargadas</span>';
     } catch (_) { $('o-alerts').textContent = 'no disponible'; }
+    finally { alertsInFlight = false; }
   }
 
+  let diskInFlight = false;
   async function refreshDisk() {
+    if (diskInFlight) return;
+    diskInFlight = true;
     try {
       diskCache = await API.disk();
     } catch (_) {
       diskCache = {};
+    } finally {
+      diskInFlight = false;
     }
     view.querySelectorAll('.o-disk').forEach((td) => {
       td.textContent = diskCache[td.dataset.svc] ?? '—';

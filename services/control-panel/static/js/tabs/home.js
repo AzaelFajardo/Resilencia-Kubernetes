@@ -208,7 +208,10 @@ export function render(view) {
 
   // Alerts are polled on their own fast interval so they update immediately
   // when a rule fires or clears, without waiting for the general refresh.
+  let alertsInFlight = false;
   async function refreshAlerts() {
+    if (alertsInFlight) return;
+    alertsInFlight = true;
     try {
       const a = await API.alerts();
       const rules = a.groups || [];
@@ -218,6 +221,7 @@ export function render(view) {
           rules.map((r) => `<span class="chip ${r.state}">${esc(r.name)}</span>`).join('')
         : empty('sin reglas de alerta cargadas');
     } catch (_) { $('home-alerts').textContent = 'no disponible'; }
+    finally { alertsInFlight = false; }
   }
 
   function refreshNodeHealth() {

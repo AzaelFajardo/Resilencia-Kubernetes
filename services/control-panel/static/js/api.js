@@ -3,15 +3,27 @@
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, opts);
-  let body = null;
-  try { body = await r.json(); } catch (_) { body = {}; }
-  if (!r.ok) throw new Error((body && body.detail) || `${r.status} ${r.statusText}`);
-  return body;
+  // Every request gets a hard timeout so a hung fetch (e.g. a slow Prometheus
+  // query or a stopped container that stalls) can never hold the UI forever.
+  // Long-running endpoints override this with their own `timeout` option.
+  const timeout = opts.timeout ?? 20000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const r = await fetch(path, { ...opts, signal: controller.signal });
+    let body = null;
+    try { body = await r.json(); } catch (_) { body = {}; }
+    if (!r.ok) throw new Error((body && body.detail) || `${r.status} ${r.statusText}`);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-function post(path, data) {
-  return api(path, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(data ?? {}) });
+function post(path, data, timeout) {
+  const opts = { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(data ?? {}) };
+  if (timeout) opts.timeout = timeout;
+  return api(path, opts);
 }
 
 function patch(path, data) {
@@ -26,7 +38,7 @@ export const API = {
   health: () => api('/api/health'),
   counts: () => api('/api/counts'),
   resources: () => api('/api/resources'),
-  disk: () => api('/api/disk'),
+  disk: () => api('/api/disk', { timeout: 45000 }),
   latency: () => api('/api/latency'),
   throughput: () => api('/api/throughput'),
   targets: () => api('/api/targets'),
@@ -70,8 +82,8 @@ export const API = {
   updateEntity: (entity, id, body) => patch(`/api/entities/${entity}/${id}`, body),
   deleteEntity: (entity, id) => del(`/api/entities/${entity}/${id}`),
 
-  faker: (what, count = 100) => post(`/api/faker/${what}?count=${count}`),
-  generateOrders: (cfg) => post('/api/orders/generate', cfg),
+  faker: (what, count = 100) => post(`/api/faker/${what}?count=${count}`, null, 180000),
+  generateOrders: (cfg) => post('/api/orders/generate', cfg, 600000),
   simulateStatus: () => api('/api/orders/simulate/status'),
   simulateStart: (cfg) => post('/api/orders/simulate/start', cfg),
   simulateStop: () => post('/api/orders/simulate/stop'),

@@ -31,6 +31,8 @@ refreshHealthStrip();
 setInterval(refreshHealthStrip, 5000);
 initTheme();
 
+let healthStripInFlight = false;
+
 function initTheme() {
   const btn = document.getElementById('themeToggle');
   if (!btn) return;
@@ -54,6 +56,8 @@ function initTheme() {
 async function refreshHealthStrip() {
   const el = document.getElementById('healthStrip');
   if (!el) return;
+  if (healthStripInFlight) return;
+  healthStripInFlight = true;
   try {
     const data = await API.health();
     el.innerHTML = Object.entries(data).map(([k, v]) =>
@@ -61,5 +65,7 @@ async function refreshHealthStrip() {
     ).join('');
   } catch (_) {
     el.innerHTML = '<span class="chip" data-tip="El panel no puede alcanzar los servicios">panel desconectado</span>';
+  } finally {
+    healthStripInFlight = false;
   }
 }

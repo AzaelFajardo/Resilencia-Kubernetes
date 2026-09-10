@@ -159,8 +159,11 @@ export function render(view) {
 
   // ---- Tráfico continuo ----
   let pollTimer = null;
+  let statusInFlight = false;
 
   async function refreshStatus() {
+    if (statusInFlight) return true;
+    statusInFlight = true;
     try {
       const s = await API.simulateStatus();
       $('s-state').innerHTML = s.running ? badge('EN EJECUCIÓN', 'ok') : badge('detenido', 'bad');
@@ -170,6 +173,7 @@ export function render(view) {
       $('s-rate').textContent = s.rate + ' req/s';
       return s.running;
     } catch (e) { $('s-state').textContent = 'no disponible'; return false; }
+    finally { statusInFlight = false; }
   }
 
   $('s-start').addEventListener('click', async () => {

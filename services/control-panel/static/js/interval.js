@@ -2,6 +2,7 @@
 
 export function mountRefreshControl(container, { onRefresh, initial = 5 } = {}) {
   let timer = null;
+  let inFlight = false;
   let seconds = Math.max(1, Math.floor(Number(initial) || 5));
 
   const wrap = document.createElement('div');
@@ -17,18 +18,27 @@ export function mountRefreshControl(container, { onRefresh, initial = 5 } = {}) 
   const input = wrap.querySelector('input');
   const btn = wrap.querySelector('button');
 
+  // Skip the tick if the previous refresh is still running. Without this, a
+  // slow refresh (e.g. a down service stalling its HTTP call) would let the
+  // interval pile up overlapping requests and saturate the panel.
+  function tick() {
+    if (inFlight || !onRefresh) return;
+    inFlight = true;
+    Promise.resolve(onRefresh()).finally(() => { inFlight = false; });
+  }
+
   function start() {
     clearInterval(timer);
-    timer = setInterval(onRefresh, seconds * 1000);
+    timer = setInterval(tick, seconds * 1000);
   }
 
   input.addEventListener('change', () => {
     seconds = Math.max(1, Math.floor(Number(input.value) || 1));
     input.value = seconds;
     start();
-    if (onRefresh) onRefresh();
+    tick();
   });
-  btn.addEventListener('click', () => onRefresh && onRefresh());
+  btn.addEventListener('click', tick);
 
   start();
 
