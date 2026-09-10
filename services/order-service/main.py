@@ -129,6 +129,14 @@ class CircuitBreakerConfig(BaseModel):
     recovery_timeout: Optional[float] = None
 
 
+class ModeRequest(BaseModel):
+    mode: str
+
+
+class ModeRequest(BaseModel):
+    mode: str
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -1262,6 +1270,64 @@ def simulate_stop():
     return {"message": "Simulation stopped", **simulate_status()}
 
 
+# Named resilience strategies (see the "Modo de resiliencia" in the control
+# panel). Each mode applies retries + circuit breaker as a coherent preset and
+# resets this service's chaos so every mode starts clean.
+MODE_PRESETS = {
+    "baseline": {"retries_enabled": False, "breaker_enabled": False},
+    "retries": {"retries_enabled": True, "retries_count": 3, "retries_delay_ms": 100, "breaker_enabled": False},
+    "breaker": {"retries_enabled": False, "breaker_enabled": True, "breaker_threshold": 3, "breaker_recovery": 15.0},
+}
+
+current_mode = "breaker"  # default system config: breaker on, retries off
+
+
+@app.get("/resilience/mode")
+def get_mode():
+    return {
+        "mode": current_mode,
+        "retries": {"enabled": RETRY_ENABLED, "count": RETRY_COUNT, "delay_ms": RETRY_DELAY_MS},
+        "circuit_breaker": {
+            "enabled": payment_cb.enabled,
+            "failure_threshold": payment_cb.failure_threshold,
+            "recovery_timeout": payment_cb.recovery_timeout,
+        },
+    }
+
+
+@app.post("/resilience/mode")
+def set_mode(req: ModeRequest):
+    global current_mode, RETRY_ENABLED, RETRY_COUNT, RETRY_DELAY_MS
+    global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
+
+    mode = req.mode.strip().lower()
+    if mode not in MODE_PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown mode '{req.mode}'. Use baseline, retries or breaker.")
+    preset = MODE_PRESETS[mode]
+
+    # Retries
+    RETRY_ENABLED = preset.get("retries_enabled", False)
+    if "retries_count" in preset:
+        RETRY_COUNT = preset["retries_count"]
+    if "retries_delay_ms" in preset:
+        RETRY_DELAY_MS = preset["retries_delay_ms"]
+
+    # Circuit breaker
+    payment_cb.configure(
+        enabled=preset.get("breaker_enabled", False),
+        failure_threshold=preset.get("breaker_threshold"),
+        recovery_timeout=preset.get("breaker_recovery"),
+    )
+
+    # Reset this service's chaos so the mode starts clean
+    FAILURE_RATE = 0.0
+    LATENCY_MS = 0
+    TIMEOUT_RATE = 0.0
+
+    current_mode = mode
+    return get_mode()
+
+
 @app.get("/resilience/retries")
 def get_retries_config():
     return {
@@ -1312,6 +1378,54 @@ def set_circuit_breaker_config(config: CircuitBreakerConfig):
         "state": payment_cb.state.value,
         "failures": payment_cb.failures,
     }
+
+
+def _infer_mode() -> str:
+    if RETRY_ENABLED and payment_cb.enabled:
+        return "full"
+    if RETRY_ENABLED:
+        return "retries"
+    if payment_cb.enabled:
+        return "breaker"
+    return "baseline"
+
+
+@app.get("/resilience/mode")
+def get_mode():
+    return {
+        "mode": _infer_mode(),
+        "retries_enabled": RETRY_ENABLED,
+        "breaker_enabled": payment_cb.enabled,
+    }
+
+
+@app.post("/resilience/mode")
+def set_mode(req: ModeRequest):
+    global RETRY_ENABLED, FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
+
+    mode = req.mode.strip().lower()
+    if mode == "baseline":
+        RETRY_ENABLED = False
+        payment_cb.configure(enabled=False)
+    elif mode == "retries":
+        RETRY_ENABLED = True
+        payment_cb.configure(enabled=False)
+    elif mode == "breaker":
+        RETRY_ENABLED = False
+        payment_cb.configure(enabled=True)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="mode must be 'baseline', 'retries' or 'breaker'",
+        )
+
+    # Reset order-service's own injected chaos so the mode starts clean.
+    # (Downstream-service chaos is reset separately from the control panel.)
+    FAILURE_RATE = 0.0
+    LATENCY_MS = 0
+    TIMEOUT_RATE = 0.0
+
+    return get_mode()
 
 
 @app.get("/chaos/config")
