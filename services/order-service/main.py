@@ -1191,7 +1191,7 @@ async def simulate_start(cfg: SimulateStart, db: AsyncSession = Depends(get_db))
     if simulator.running:
         return {"message": "Simulation already running", **simulate_status()}
 
-    rate = max(0.1, min(cfg.rate, 50.0))
+    rate = max(0.1, cfg.rate)
     quantity = max(1, min(cfg.quantity, 1000))
 
     if cfg.clients is not None:

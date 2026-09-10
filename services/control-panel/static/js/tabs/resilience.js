@@ -70,11 +70,11 @@ export function render(view) {
         'Configuraciones de fallo de un clic para no escribir los valores a mano.',
         `
         <div class="row">
-          <button class="btn secondary sm" data-preset="payment-fail">Payment 100% fallo</button>
-          <button class="btn secondary sm" data-preset="inventory-latency">Inventory +500ms</button>
-          <button class="btn secondary sm" data-preset="order-timeout">Order 20% timeout</button>
-          <button class="btn secondary sm" data-preset="user-fail">User 50% fallo</button>
-          <button class="btn danger sm" data-preset="reset">Reset todo</button>
+          <button class="btn secondary sm" data-preset="payment-fail">Romper el pago (100%)</button>
+          <button class="btn secondary sm" data-preset="inventory-latency">Inventario lento (+500 ms)</button>
+          <button class="btn secondary sm" data-preset="order-timeout">Pedidos con timeout (20%)</button>
+          <button class="btn secondary sm" data-preset="user-fail">Clientes con fallos (50%)</button>
+          <button class="btn danger sm" data-preset="reset">Restablecer todo</button>
         </div>
         <div class="msg" id="r-preset-msg"></div>
       `)}
@@ -85,11 +85,11 @@ export function render(view) {
       `
       <div class="row">
         <select id="r-scen">
-          <option value="breaker">Circuit breaker (payment al 100%)</option>
-          <option value="retries">Reintentos (payment al 30%)</option>
-          <option value="latency">Latencia (inventory +500ms)</option>
+          <option value="breaker">Pago siempre falla → circuit breaker</option>
+          <option value="retries">Pago falla a veces → reintentos</option>
+          <option value="latency">Inventario lento → latencia</option>
         </select>
-        <button class="btn" id="r-run">Ejecutar escenario</button>
+        <button class="btn" id="r-run">Probar escenario</button>
         <span id="r-run-state" class="muted"></span>
       </div>
       <div id="r-results"></div>
