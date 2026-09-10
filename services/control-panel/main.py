@@ -16,15 +16,15 @@ out of scope for this pass. See README note in this service's directory.
 """
 import asyncio
 import os
+import socket
 import urllib.parse
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional
-
-app = FastAPI(title="control-panel")
 
 SERVICES = {
     "order": os.getenv("ORDER_SERVICE_URL", "http://order-service:8000"),
@@ -47,7 +47,124 @@ K8S_CERT = (
 # and Prometheus are reached via /api/v1/namespaces/default/services/.../proxy).
 RUNTIME_MODE = "compose"
 
+import concurrent.futures
+import time
+
 _NAMESPACE = "default"
+_IP_CACHE: dict[str, str] = {}
+_FAILED_RESOLVE: dict[str, float] = {}
+_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+
+
+def sync_ip_cache_from_docker():
+    """Reads container IP addresses directly from Docker socket without DNS lookups."""
+    if _docker is None:
+        return
+    try:
+        for c in _docker.containers.list(all=True):
+            c_name = c.name
+            for svc_key in ("user-service", "order-service", "inventory-service", "payment-service", "notification-service", "prometheus"):
+                if svc_key in c_name:
+                    nets = c.attrs.get("NetworkSettings", {}).get("Networks", {})
+                    for net in nets.values():
+                        ip = net.get("IPAddress")
+                        if ip:
+                            _IP_CACHE[svc_key] = ip
+                            break
+    except Exception:
+        pass
+
+
+def _getaddrinfo_sync(hostname: str, port: int) -> Optional[str]:
+    try:
+        infos = socket.getaddrinfo(hostname, port)
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        pass
+    return None
+
+
+async def resolve_one(url: str):
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = parsed.hostname
+        if not hostname or hostname in ("localhost", "127.0.0.1") or hostname.replace(".", "").isdigit():
+            return
+        if hostname in _IP_CACHE:
+            return
+        if time.time() - _FAILED_RESOLVE.get(hostname, 0) < 30.0:
+            return
+
+        port = parsed.port or (80 if parsed.scheme == "http" else 443)
+        loop = asyncio.get_running_loop()
+        try:
+            ip = await asyncio.wait_for(
+                loop.run_in_executor(_DNS_EXECUTOR, _getaddrinfo_sync, hostname, port),
+                timeout=0.3,
+            )
+            if ip:
+                _IP_CACHE[hostname] = ip
+            else:
+                _FAILED_RESOLVE[hostname] = time.time()
+        except Exception:
+            _FAILED_RESOLVE[hostname] = time.time()
+    except Exception:
+        pass
+
+
+async def warmup_dns_cache():
+    """Pre-populates _IP_CACHE for all microservices in parallel at startup."""
+    sync_ip_cache_from_docker()
+    targets = list(SERVICES.values()) + [PROMETHEUS_URL]
+    await asyncio.gather(*(resolve_one(u) for u in targets))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await warmup_dns_cache()
+    yield
+
+
+app = FastAPI(title="control-panel", lifespan=lifespan)
+
+
+def resolve_url(url: str) -> tuple[str, dict]:
+    """Fast URL resolver with in-memory IP caching to bypass Docker DNS timeouts on stopped containers.
+
+    When a container is stopped in Docker Compose, Docker's internal DNS (127.0.0.11)
+    hangs for ~8s. Connecting directly to the cached IP or dummy IP fails instantly without
+    touching Docker DNS, preventing thread pool starvation across healthy services.
+    """
+    if RUNTIME_MODE == "kubernetes":
+        return url, {}
+
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = parsed.hostname
+        if not hostname or hostname in ("localhost", "127.0.0.1") or hostname.replace(".", "").isdigit():
+            return url, {}
+
+        port = parsed.port or (80 if parsed.scheme == "http" else 443)
+        cached_ip = _IP_CACHE.get(hostname)
+
+        if not cached_ip:
+            sync_ip_cache_from_docker()
+            cached_ip = _IP_CACHE.get(hostname)
+
+        target_ip = cached_ip or "127.0.0.1"
+        target_port = port if cached_ip else 1
+
+        netloc = f"{target_ip}:{target_port}"
+        new_url = urllib.parse.urlunsplit(
+            (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+        )
+        headers = {"Host": parsed.netloc}
+        return new_url, headers
+    except Exception:
+        pass
+
+    return url, {}
 
 
 def service_base(key: str) -> str:
@@ -90,25 +207,21 @@ except Exception:
 
 async def _get(client: httpx.AsyncClient, url: str, timeout: float = 5.0):
     try:
-        r = await client.get(url, timeout=timeout)
+        target_url, headers = resolve_url(url)
+        r = await client.get(target_url, headers=headers, timeout=timeout)
         return r.status_code, (r.json() if r.content else {})
     except Exception as e:
-        return 0, {"error": str(e)}
+        err_msg = str(e) or type(e).__name__
+        return 0, {"error": err_msg}
 
 
 @app.get("/api/health")
 async def health():
-    """Health of all 5 services, queried in parallel with a short timeout.
-
-    Checking services sequentially meant a single stopped container (whose
-    Docker DNS lookup times out rather than refusing the connection) would
-    stall the whole snapshot for its full timeout and skew the state of every
-    other node. Parallel + short timeout keeps each service's status accurate
-    and independent."""
+    """Health of all 5 services, queried in parallel with a short timeout."""
     async with _client() as client:
 
         async def one(key: str):
-            code, body = await _get(client, f"{service_base(key)}/health", timeout=2.0)
+            code, body = await _get(client, f"{service_base(key)}/health", timeout=0.5)
             return key, {"up": code == 200, "detail": body}
 
         results = await asyncio.gather(*(one(key) for key in SERVICES))
@@ -122,7 +235,7 @@ async def counts():
     async with _client() as client:
 
         async def one(key: str):
-            code, body = await _get(client, f"{service_base(key)}{endpoints[key]}")
+            code, body = await _get(client, f"{service_base(key)}{endpoints[key]}", timeout=0.5)
             return key, body.get("count") if code == 200 else None
 
         results = await asyncio.gather(*(one(key) for key in endpoints))
@@ -258,6 +371,8 @@ def service_action(service: str, action: str):
             c.stop()
         else:
             c.start()
+            time.sleep(0.5)
+            sync_ip_cache_from_docker()
         return {"service": service, "action": action, "container": name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{name}: {e}")
@@ -452,9 +567,14 @@ _ENTITY_MAP = {
 }
 
 
-async def _proxy_json(method: str, url: str, body=None, timeout: float = 15.0):
+async def _proxy_json(method: str, url: str, body=None, timeout: float = 5.0):
+    target_url, headers = resolve_url(url)
     async with _client() as client:
-        r = await client.request(method, url, json=body, timeout=timeout)
+        try:
+            r = await client.request(method, target_url, headers=headers, json=body, timeout=timeout)
+        except Exception as e:
+            err_msg = str(e) or type(e).__name__
+            raise HTTPException(status_code=503, detail=f"Service unavailable: {err_msg}")
     if r.status_code >= 400:
         detail = ""
         try:
@@ -568,9 +688,14 @@ class OrderPlacement(BaseModel):
 
 @app.post("/api/orders")
 async def place_order(order: OrderPlacement):
+    target_url, headers = resolve_url(f"{service_base('order')}/orders")
     async with _client() as client:
-        r = await client.post(f"{service_base('order')}/orders", json=order.model_dump(), timeout=15.0)
-        return r.json()
+        try:
+            r = await client.post(target_url, headers=headers, json=order.model_dump(), timeout=15.0)
+            return r.json()
+        except Exception as e:
+            err_msg = str(e) or type(e).__name__
+            raise HTTPException(status_code=503, detail=f"order-service unavailable: {err_msg}")
 
 
 @app.post("/api/generate/{what}")

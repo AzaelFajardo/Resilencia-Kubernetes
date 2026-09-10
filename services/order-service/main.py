@@ -5,7 +5,9 @@ import asyncio
 import logging
 import os
 import random
+import socket
 import time
+import urllib.parse
 import uuid
 from enum import Enum
 from typing import Optional
@@ -25,10 +27,61 @@ from tracing import setup_tracing
 logger = logging.getLogger(__name__)
 
 
+import concurrent.futures
+
+_IP_CACHE: dict[str, str] = {}
+_FAILED_RESOLVE: dict[str, float] = {}
+_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+
+
+def _getaddrinfo_sync(hostname: str, port: int) -> Optional[str]:
+    try:
+        infos = socket.getaddrinfo(hostname, port)
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        pass
+    return None
+
+
+async def resolve_one(url: str):
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = parsed.hostname
+        if not hostname or hostname in ("localhost", "127.0.0.1") or hostname.replace(".", "").isdigit():
+            return
+        if hostname in _IP_CACHE:
+            return
+        if time.time() - _FAILED_RESOLVE.get(hostname, 0) < 30.0:
+            return
+
+        port = parsed.port or (80 if parsed.scheme == "http" else 443)
+        loop = asyncio.get_running_loop()
+        try:
+            ip = await asyncio.wait_for(
+                loop.run_in_executor(_DNS_EXECUTOR, _getaddrinfo_sync, hostname, port),
+                timeout=0.3,
+            )
+            if ip:
+                _IP_CACHE[hostname] = ip
+            else:
+                _FAILED_RESOLVE[hostname] = time.time()
+        except Exception:
+            _FAILED_RESOLVE[hostname] = time.time()
+    except Exception:
+        pass
+
+
+async def warmup_dns_cache():
+    urls = [USER_SERVICE_URL, INVENTORY_SERVICE_URL, PAYMENT_SERVICE_URL, NOTIFICATION_SERVICE_URL]
+    await asyncio.gather(*(resolve_one(u) for u in urls if u))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await warmup_dns_cache()
     yield
 
 
@@ -385,6 +438,32 @@ def should_simulate_failure() -> bool:
     return FAILURE_RATE > 0 and random.random() < FAILURE_RATE
 
 
+def resolve_url(url: str) -> tuple[str, dict]:
+    """Fast URL resolver with in-memory IP caching to bypass Docker DNS timeouts on stopped containers."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        hostname = parsed.hostname
+        if not hostname or hostname in ("localhost", "127.0.0.1") or hostname.replace(".", "").isdigit():
+            return url, {}
+
+        port = parsed.port or (80 if parsed.scheme == "http" else 443)
+        cached_ip = _IP_CACHE.get(hostname)
+
+        target_ip = cached_ip or "127.0.0.1"
+        target_port = port if cached_ip else 1
+
+        netloc = f"{target_ip}:{target_port}"
+        new_url = urllib.parse.urlunsplit(
+            (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+        )
+        headers = {"Host": parsed.netloc}
+        return new_url, headers
+    except Exception:
+        pass
+
+    return url, {}
+
+
 async def call_service(
     client: httpx.AsyncClient,
     method: str,
@@ -401,10 +480,11 @@ async def call_service(
     # a genuine rejection wouldn't change the outcome.
     last_error = None
     attempts = (max(retries, 0) + 1) if RETRY_ENABLED else 1
+    target_url, headers = resolve_url(url)
 
     for attempt in range(attempts):
         try:
-            response = await client.request(method, url, timeout=HTTP_TIMEOUT, json=json_data)
+            response = await client.request(method, target_url, headers=headers, timeout=HTTP_TIMEOUT, json=json_data)
         except Exception as exc:
             last_error = exc
             if attempt < attempts - 1:
