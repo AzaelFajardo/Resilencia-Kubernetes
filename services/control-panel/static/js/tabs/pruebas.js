@@ -2,12 +2,15 @@
 
 import { API } from '../api.js';
 import { card, badge, toast, esc, confirmDialog, table, fmt } from '../ui.js';
-import { mountRefreshControl } from '../interval.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
 
 export function render(view) {
   view.innerHTML = `
+    <div class="row" style="justify-content:flex-end;margin-bottom:12px">
+      <a href="#/observability" target="_blank" class="btn">Ver métricas</a>
+    </div>
+
     ${card('Modo de resiliencia',
       'Elige cómo se defiende el sistema ante fallos. · Baseline: sin protección (bajo carga se satura o se cae). · Reintentos: reintenta los pedidos que fallan. · Circuit breaker: deja de llamar a un servicio caído. · Kubernetes: usa el cluster (HPA + liveness probes).',
       `
@@ -115,18 +118,6 @@ export function render(view) {
         </table>
       `)}
     </div>
-    ${card('Latencia por servicio (en vivo)',
-      'Percentiles de latencia de cada servicio. p50 = mediana (la mitad de las peticiones tarda menos). p90/p95/p99 = el 90/95/99% tarda menos. p100 = el máximo observado. Pon el refresco en 1s y ejecuta una prueba para verlos moverse.',
-      table(['Servicio', 'p50', 'p90', 'p95', 'p99', 'p100 (máx)'], [])
-        .replace('<tbody></tbody>', '<tbody id="lat-body"></tbody>'),
-      { full: true })}
-    ${card('Ver el efecto en las métricas',
-      'Estos pedidos reales alimentan Prometheus. Abre las métricas en otra ventana y ejecuta una prueba aquí para ver al momento cómo cambian la latencia, el número de peticiones y los recursos.',
-      `<div class="row">
-        <a href="#/observability" target="_blank" class="btn">Ver métricas en otra ventana</a>
-        <a href="http://localhost:3001" target="_blank" class="btn secondary">Abrir Grafana</a>
-      </div>`,
-      { full: true })}
   `;
 
   const $ = (id) => view.querySelector('#' + id);
@@ -260,18 +251,6 @@ export function render(view) {
 
   loadModeState();
 
-  // ---- Latencia por servicio (en vivo) ----
-  async function refreshLatency() {
-    try {
-      const d = await API.latency();
-      $('lat-body').innerHTML = Object.entries(d).map(([k, v]) =>
-        `<tr><td>${esc(k)}-service</td><td>${fmt(v.p50)}</td><td>${fmt(v.p90)}</td><td>${fmt(v.p95)}</td><td>${fmt(v.p99)}</td><td>${fmt(v.p100)}</td></tr>`
-      ).join('') || `<tr><td colspan="6" class="muted">sin datos de latencia</td></tr>`;
-    } catch (_) {}
-  }
-  const latencyCleanup = mountRefreshControl(view, { onRefresh: refreshLatency, initial: 2 });
-  refreshLatency();
-
   // ---- Pedidos en lote ----
   $('b-go').addEventListener('click', async () => {
     const cfg = { count: intOr('b-count') || 1 };
@@ -330,7 +309,7 @@ export function render(view) {
 
   refreshStatus();
 
-  return () => { latencyCleanup(); if (pollTimer) clearInterval(pollTimer); };
+  return () => { if (pollTimer) clearInterval(pollTimer); };
 }
 
 function readChaos(frEl, lmEl, trEl) {
