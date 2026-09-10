@@ -133,10 +133,6 @@ class ModeRequest(BaseModel):
     mode: str
 
 
-class ModeRequest(BaseModel):
-    mode: str
-
-
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -1378,54 +1374,6 @@ def set_circuit_breaker_config(config: CircuitBreakerConfig):
         "state": payment_cb.state.value,
         "failures": payment_cb.failures,
     }
-
-
-def _infer_mode() -> str:
-    if RETRY_ENABLED and payment_cb.enabled:
-        return "full"
-    if RETRY_ENABLED:
-        return "retries"
-    if payment_cb.enabled:
-        return "breaker"
-    return "baseline"
-
-
-@app.get("/resilience/mode")
-def get_mode():
-    return {
-        "mode": _infer_mode(),
-        "retries_enabled": RETRY_ENABLED,
-        "breaker_enabled": payment_cb.enabled,
-    }
-
-
-@app.post("/resilience/mode")
-def set_mode(req: ModeRequest):
-    global RETRY_ENABLED, FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
-
-    mode = req.mode.strip().lower()
-    if mode == "baseline":
-        RETRY_ENABLED = False
-        payment_cb.configure(enabled=False)
-    elif mode == "retries":
-        RETRY_ENABLED = True
-        payment_cb.configure(enabled=False)
-    elif mode == "breaker":
-        RETRY_ENABLED = False
-        payment_cb.configure(enabled=True)
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="mode must be 'baseline', 'retries' or 'breaker'",
-        )
-
-    # Reset order-service's own injected chaos so the mode starts clean.
-    # (Downstream-service chaos is reset separately from the control panel.)
-    FAILURE_RATE = 0.0
-    LATENCY_MS = 0
-    TIMEOUT_RATE = 0.0
-
-    return get_mode()
 
 
 @app.get("/chaos/config")
