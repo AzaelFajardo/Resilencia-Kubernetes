@@ -13,10 +13,10 @@ export function render(view) {
 
     <div class="grid">
       ${card('Reintentos (order-service)',
-        'Reintentos automáticos de order-service hacia los servicios downstream cuando fallan. Actívalos para que una petición se reintente N veces con una espera entre intentos. Afecta a las llamadas de usuario, inventario, pago y notificación.',
+        'Parámetros de reintento de order-service cuando el sistema está en Modo Reintentos. Permite ajustar el número de reintentos y el tiempo de espera entre intentos.',
         `
+        <div id="r-ret-notice" class="msg warn" style="display:none;margin-bottom:10px;padding:8px 12px;border-radius:8px;background:var(--warn-bg,#3a2f0f);color:var(--warn-fg,#f5a623);font-size:12px"></div>
         <div class="row">
-          <label><input type="checkbox" id="r-ret-enabled"> habilitados</label>
           <label>reintentos <input id="r-ret-count" type="number" min="0" max="10" value="3"></label>
           <label>espera (ms) <input id="r-ret-delay" type="number" min="0" value="100"></label>
           <button class="btn sm" id="r-ret-save">Guardar</button>
@@ -168,7 +168,6 @@ export function render(view) {
     const msg = $('r-ret-msg');
     try {
       const r = await API.setRetries({
-        enabled: $('r-ret-enabled').checked,
         count: parseInt($('r-ret-count').value) || 0,
         delay_ms: parseInt($('r-ret-delay').value) || 0,
       });
@@ -179,10 +178,31 @@ export function render(view) {
 
   async function loadRetries() {
     try {
-      const r = await API.getRetries();
-      $('r-ret-enabled').checked = !!r.enabled;
-      $('r-ret-count').value = r.count;
-      $('r-ret-delay').value = r.delay_ms;
+      const modeData = await API.getMode();
+      const runtimeData = await API.getRuntimeMode().catch(() => ({ mode: 'compose' }));
+      const isRetriesMode = runtimeData.mode === 'compose' && modeData.mode === 'retries';
+      const retriesConfig = modeData.retries || (await API.getRetries());
+
+      $('r-ret-count').value = retriesConfig.count ?? 3;
+      $('r-ret-delay').value = retriesConfig.delay_ms ?? 100;
+
+      const noticeEl = $('r-ret-notice');
+      const countEl = $('r-ret-count');
+      const delayEl = $('r-ret-delay');
+      const saveBtn = $('r-ret-save');
+
+      if (!isRetriesMode) {
+        countEl.disabled = true;
+        delayEl.disabled = true;
+        saveBtn.disabled = true;
+        noticeEl.style.display = 'block';
+        noticeEl.innerHTML = '⚠️ El sistema no está en <b>Modo Reintentos</b>. Cambia al modo <b>Reintentos</b> desde la pestaña de <b>Inicio</b> para usar esta configuración.';
+      } else {
+        countEl.disabled = false;
+        delayEl.disabled = false;
+        saveBtn.disabled = false;
+        noticeEl.style.display = 'none';
+      }
     } catch (_) {}
   }
 
