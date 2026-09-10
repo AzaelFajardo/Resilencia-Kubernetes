@@ -19,8 +19,7 @@ export function render(view) {
           .replace('<tbody></tbody>', '<tbody id="o-tp"></tbody>'))}
       ${card('Recursos por servicio (CPU / RAM / Disco)',
         'CPU en núcleos (rate de process_cpu_seconds_total), RAM residente en MiB (process_resident_memory_bytes) y escritura de disco acumulada en MiB (leída del socket de Docker, sin contador Prometheus). El disco se actualiza aparte (~30 s) por ser una lectura lenta.',
-        table(['Servicio', 'CPU (cores)', 'RAM (MiB)', 'Disco (MiB)'], [])
-          .replace('<tbody></tbody>', '<tbody id="o-res"></tbody>'))}
+        '<div id="o-res" class="res-grid"><div class="muted">cargando…</div></div>')}
       ${card('Objetivos de Prometheus (scrape)',
         'Los 6 objetivos que Prometheus está raspando (5 microservicios + otel-collector) y su salud. Si un servicio está caído, su objetivo pasa a "down".',
         table(['Job', 'Instancia', 'Salud'], [])
@@ -69,10 +68,57 @@ export function render(view) {
 
     try {
       const res = await API.resources();
-      $('o-res').innerHTML = Object.entries(res).map(([inst, v]) => {
+      const entries = Object.entries(res);
+      $('o-res').innerHTML = entries.map(([inst, v]) => {
         const svc = inst.split('-')[0];
-        return `<tr><td>${esc(inst)}</td><td>${fmt(v.cpu_cores, 3)}</td><td>${fmt(v.mem_mib, 1)}</td><td class="o-disk" data-svc="${esc(svc)}">${diskCache[svc] ?? '—'}</td></tr>`;
-      }).join('') || `<tr><td colspan="4" class="muted">sin datos (Prometheus vacío)</td></tr>`;
+        const cpuCores = v.cpu_cores || 0;
+        const memMib = v.mem_mib || 0;
+        const diskVal = diskCache[svc];
+        const diskMib = diskVal != null ? parseFloat(diskVal) : 0;
+
+        const cpuPct = Math.min(100, Math.max(cpuCores > 0 ? 4 : 0, Math.round((cpuCores / 0.20) * 100)));
+        const ramPct = Math.min(100, Math.max(memMib > 0 ? 4 : 0, Math.round((memMib / 256) * 100)));
+        const diskPct = Math.min(100, Math.max(diskMib > 0 ? 4 : 0, Math.round((diskMib / 100) * 100)));
+
+        return `
+          <div class="res-card">
+            <div class="res-card-header">
+              <span class="res-svc-title">
+                <span class="dot up"></span> ${esc(inst)}
+              </span>
+            </div>
+            <div class="res-metrics-grid">
+              <div class="res-metric-item">
+                <div class="res-metric-meta">
+                  <span>⚡ CPU</span>
+                  <span class="res-metric-val">${fmt(cpuCores, 3)} cores</span>
+                </div>
+                <div class="res-bar-track" title="${fmt(cpuCores, 3)} cores">
+                  <div class="res-bar-fill cpu" style="width: ${cpuPct}%;"></div>
+                </div>
+              </div>
+              <div class="res-metric-item">
+                <div class="res-metric-meta">
+                  <span>💾 RAM</span>
+                  <span class="res-metric-val">${fmt(memMib, 1)} MiB</span>
+                </div>
+                <div class="res-bar-track" title="${fmt(memMib, 1)} MiB">
+                  <div class="res-bar-fill ram" style="width: ${ramPct}%;"></div>
+                </div>
+              </div>
+              <div class="res-metric-item">
+                <div class="res-metric-meta">
+                  <span>💿 Disco</span>
+                  <span class="res-metric-val o-disk-val" data-svc="${esc(svc)}">${diskVal != null ? esc(diskVal) + ' MiB' : '—'}</span>
+                </div>
+                <div class="res-bar-track">
+                  <div class="res-bar-fill disk o-disk-bar" data-svc="${esc(svc)}" style="width: ${diskPct}%;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('') || `<div class="muted">sin datos (Prometheus vacío)</div>`;
     } catch (_) {}
 
     try {
@@ -116,8 +162,18 @@ export function render(view) {
     } finally {
       diskInFlight = false;
     }
-    view.querySelectorAll('.o-disk').forEach((td) => {
-      td.textContent = diskCache[td.dataset.svc] ?? '—';
+    view.querySelectorAll('.o-disk-val').forEach((el) => {
+      const val = diskCache[el.dataset.svc];
+      el.textContent = val != null ? `${val} MiB` : '—';
+    });
+    view.querySelectorAll('.o-disk-bar').forEach((bar) => {
+      const val = parseFloat(diskCache[bar.dataset.svc]);
+      if (!isNaN(val) && val > 0) {
+        const pct = Math.min(100, Math.max(4, Math.round((val / 100) * 100)));
+        bar.style.width = `${pct}%`;
+      } else {
+        bar.style.width = '0%';
+      }
     });
   }
 
