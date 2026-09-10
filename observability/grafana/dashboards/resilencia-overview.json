@@ -331,18 +331,6 @@
       ],
       "title": "Prometheus Target Up Status",
       "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
-      "id": 21,
-      "options": {
-        "code": { "language": "plaintext", "showLineNumbers": false, "showMiniMap": false },
-        "content": "### Observability caveats (read before trusting this row)\n\n- **The OTel *metrics* pipeline is wired but empty.** `observability/otel-collector.yaml` has a full `metrics` pipeline (OTLP receiver -> Prometheus exporter on :8889), but every service's `tracing.py` only ever sends **traces**, never OTel metrics - so `:8889/metrics` returns nothing. The panels above use each service's own `prometheus_client` HTTP endpoint (:8000/metrics) instead, which is unrelated to this unused pipeline.\n- **Traces live in Jaeger, not here.** Open http://localhost:16687 (or `JAEGER_PORT` from `.env`) for the actual trace view and per-service span counts - there's no Jaeger datasource provisioned in this Grafana, by design (this dashboard is Prometheus-only).\n- **OTel instrumentation overhead** (+35-42% median/p95 latency) and the **span-loss check** (none detected at ~21-43 req/s peak, but not a strong proof at higher throughput) were both measured directly against Jaeger/k6, not through Grafana - see `docs/tests/resources-observability-results.md` for the full numbers and caveats.\n- **Sampling impact was never measured** - `OTEL_TRACES_SAMPLER` support doesn't exist in `tracing.py` yet (documented as optional future work, not a bug)."
-      },
-      "pluginVersion": "10.4.2",
-      "title": "Notes",
-      "type": "text"
     }
   ],
   "refresh": "10s",

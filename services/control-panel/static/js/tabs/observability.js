@@ -38,14 +38,16 @@ export function render(view) {
   const $ = (id) => view.querySelector('#' + id);
 
   let diskCache = {};
+  let grafanaBase = null;
 
   const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
   refreshDisk();
   const diskTimer = setInterval(refreshDisk, 30000);
   initGrafana();
+  document.addEventListener('themechange', setGrafanaSrc);
 
-  const cleanup = () => { refreshCleanup(); clearInterval(diskTimer); };
+  const cleanup = () => { refreshCleanup(); clearInterval(diskTimer); document.removeEventListener('themechange', setGrafanaSrc); };
   return cleanup;
 
   async function refresh() {
@@ -106,8 +108,17 @@ export function render(view) {
 
   async function initGrafana() {
     try {
-      const cfg = await API.config();
-      $('o-graf').src = cfg.grafana_url + '/d/resilencia-overview/resilencia-overview?orgId=1&kiosk&refresh=10s&theme=dark';
+      if (!grafanaBase) {
+        const cfg = await API.config();
+        grafanaBase = cfg.grafana_url;
+      }
+      setGrafanaSrc();
     } catch (_) {}
+  }
+
+  function setGrafanaSrc() {
+    if (!grafanaBase) return;
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    $('o-graf').src = `${grafanaBase}/d/resilencia-overview/resilencia-overview?orgId=1&kiosk&refresh=10s&theme=${theme}`;
   }
 }

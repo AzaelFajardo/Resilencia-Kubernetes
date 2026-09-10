@@ -39,6 +39,7 @@ function initTheme() {
     document.documentElement.setAttribute('data-theme', theme);
     try { localStorage.setItem('theme', theme); } catch (_) {}
     btn.textContent = theme === 'dark' ? 'Claro' : 'Oscuro';
+    document.dispatchEvent(new CustomEvent('themechange', { detail: theme }));
   }
 
   const saved = document.documentElement.getAttribute('data-theme') || 'light';
