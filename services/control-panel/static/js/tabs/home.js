@@ -24,7 +24,6 @@ export function render(view) {
         <button class="btn" id="f-run">Probar orden</button>
         <label><input type="checkbox" id="f-auto"> auto (cada 3s)</label>
         <span id="f-msg" class="muted"></span>
-        <button class="btn danger" id="f-clear-all" style="margin-left:auto">Limpiar Todo</button>
       </div>
       <div class="flow">
         <div class="node client">Cliente</div>
@@ -101,7 +100,6 @@ export function render(view) {
   }
 
   $('f-run').addEventListener('click', runFlow);
-  $('f-clear-all')?.addEventListener('click', handleClearAll);
   $('home-clear-all-counts')?.addEventListener('click', handleClearAll);
   $('f-auto').addEventListener('change', () => {
     if ($('f-auto').checked) { autoTimer = setInterval(runFlow, 3000); runFlow(); }
