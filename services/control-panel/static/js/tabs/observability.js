@@ -90,7 +90,7 @@ export function render(view) {
             <div class="res-metrics-grid">
               <div class="res-metric-item">
                 <div class="res-metric-meta">
-                  <span>⚡ CPU</span>
+                  <span>CPU</span>
                   <span class="res-metric-val">${fmt(cpuCores, 3)} cores</span>
                 </div>
                 <div class="res-bar-track" title="${fmt(cpuCores, 3)} cores">
@@ -99,7 +99,7 @@ export function render(view) {
               </div>
               <div class="res-metric-item">
                 <div class="res-metric-meta">
-                  <span>💾 RAM</span>
+                  <span>RAM</span>
                   <span class="res-metric-val">${fmt(memMib, 1)} MiB</span>
                 </div>
                 <div class="res-bar-track" title="${fmt(memMib, 1)} MiB">
@@ -108,7 +108,7 @@ export function render(view) {
               </div>
               <div class="res-metric-item">
                 <div class="res-metric-meta">
-                  <span>💿 Disco</span>
+                  <span>Disco</span>
                   <span class="res-metric-val o-disk-val" data-svc="${esc(svc)}">${diskVal != null ? esc(diskVal) + ' MiB' : '—'}</span>
                 </div>
                 <div class="res-bar-track">
