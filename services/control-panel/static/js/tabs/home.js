@@ -24,7 +24,7 @@ export function render(view) {
         <button class="btn" id="f-run">Probar orden</button>
         <label><input type="checkbox" id="f-auto"> auto (cada 3s)</label>
         <span id="f-msg" class="muted"></span>
-        <button class="btn danger" id="f-clear-all" style="margin-left:auto">Limpiar TODAS las pestañas (BD)</button>
+        <button class="btn danger" id="f-clear-all" style="margin-left:auto">Limpiar Todo</button>
       </div>
       <div class="flow">
         <div class="node client">Cliente</div>
@@ -47,11 +47,11 @@ export function render(view) {
         table(['Servicio', 'Estado'], [])
           .replace('<tbody></tbody>', '<tbody id="home-health"></tbody>'))}
       ${card('Conteos de registros',
-        'Número total de registros persistidos en PostgreSQL para cada entidad. Usa "Limpiar TODAS las pestañas" para vaciar la base de datos.',
+        'Número total de registros persistidos en PostgreSQL para cada entidad. Usa "Limpiar Todo" para vaciar la base de datos.',
         table(['Entidad', 'Cantidad'], [])
           .replace('<tbody></tbody>', '<tbody id="home-counts"></tbody>') +
         `<div class="row" style="justify-content:flex-end;margin-top:10px">
-          <button class="btn danger sm" id="home-clear-all-counts">Limpiar TODAS las pestañas</button>
+          <button class="btn danger sm" id="home-clear-all-counts">Limpiar Todo</button>
          </div>`
       )}
       ${card('Circuit breaker (order → payment)',
