@@ -42,12 +42,14 @@ export function render(view) {
 
   const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
+  refreshAlerts();
+  const alertsTimer = setInterval(refreshAlerts, 1000);
   refreshDisk();
   const diskTimer = setInterval(refreshDisk, 30000);
   initGrafana();
   document.addEventListener('themechange', setGrafanaSrc);
 
-  const cleanup = () => { refreshCleanup(); clearInterval(diskTimer); document.removeEventListener('themechange', setGrafanaSrc); };
+  const cleanup = () => { refreshCleanup(); clearInterval(alertsTimer); clearInterval(diskTimer); document.removeEventListener('themechange', setGrafanaSrc); };
   return cleanup;
 
   async function refresh() {
@@ -80,7 +82,11 @@ export function render(view) {
         `<tr><td>${esc(tg.job)}</td><td>${esc(tg.instance)}</td><td>${dot(tg.health === 'up')}${esc(tg.health)}</td></tr>`
       ).join('') || `<tr><td colspan="3" class="muted">sin objetivos</td></tr>`;
     } catch (_) { $('o-targets').innerHTML = `<tr><td colspan="3" class="muted">no disponible</td></tr>`; }
+  }
 
+  // Alerts poll on their own fast interval so they update immediately when a
+  // rule fires or clears, without waiting for the general metrics refresh.
+  async function refreshAlerts() {
     try {
       const a = await API.alerts();
       const rules = a.groups || [];

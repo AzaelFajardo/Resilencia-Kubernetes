@@ -81,6 +81,8 @@ export function render(view) {
 
   const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
   refresh();
+  refreshAlerts();
+  const alertsTimer = setInterval(refreshAlerts, 1000);
 
   $('f-run').addEventListener('click', runFlow);
   $('f-auto').addEventListener('change', () => {
@@ -197,6 +199,17 @@ export function render(view) {
     } catch (_) { $('home-cb').textContent = 'no disponible'; }
 
     try {
+      const recent = await API.recent('orders', 8);
+      $('home-recent').innerHTML = recent.map((o) =>
+        `<tr class="${o.id === highlightId ? 'highlight' : ''}"><td>${o.id}</td><td>${o.user_id}</td><td>${o.product_id}</td><td>${o.quantity}</td><td>${esc(o.status)}</td></tr>`
+      ).join('') || `<tr><td colspan="5" class="muted">sin órdenes todavía</td></tr>`;
+    } catch (_) {}
+  }
+
+  // Alerts are polled on their own fast interval so they update immediately
+  // when a rule fires or clears, without waiting for the general refresh.
+  async function refreshAlerts() {
+    try {
       const a = await API.alerts();
       const rules = a.groups || [];
       const firing = rules.filter((r) => r.state === 'firing');
@@ -205,13 +218,6 @@ export function render(view) {
           rules.map((r) => `<span class="chip ${r.state}">${esc(r.name)}</span>`).join('')
         : empty('sin reglas de alerta cargadas');
     } catch (_) { $('home-alerts').textContent = 'no disponible'; }
-
-    try {
-      const recent = await API.recent('orders', 8);
-      $('home-recent').innerHTML = recent.map((o) =>
-        `<tr class="${o.id === highlightId ? 'highlight' : ''}"><td>${o.id}</td><td>${o.user_id}</td><td>${o.product_id}</td><td>${o.quantity}</td><td>${esc(o.status)}</td></tr>`
-      ).join('') || `<tr><td colspan="5" class="muted">sin órdenes todavía</td></tr>`;
-    } catch (_) {}
   }
 
   function refreshNodeHealth() {
@@ -236,5 +242,5 @@ export function render(view) {
     });
   }
 
-  return () => { refreshCleanup(); clearInterval(autoTimer); clearTimeout(highlightTimer); animTimers.forEach(clearTimeout); };
+  return () => { refreshCleanup(); clearInterval(autoTimer); clearInterval(alertsTimer); clearTimeout(highlightTimer); animTimers.forEach(clearTimeout); };
 }
