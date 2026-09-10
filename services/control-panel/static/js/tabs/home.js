@@ -17,6 +17,21 @@ const LABELS = {
 
 export function render(view) {
   view.innerHTML = `
+    ${card('Modo de resiliencia',
+      'Elige cómo se defiende el sistema ante fallos. · Baseline: sin protección (bajo carga se satura o se cae). · Reintentos: reintenta los pedidos que fallan. · Circuit breaker: deja de llamar a un servicio caído. · Kubernetes: usa el cluster (HPA + liveness probes).',
+      `
+      <div class="seg" id="mode-seg">
+        <button type="button" data-mode="baseline" data-tip="Sin resiliencia: ni reintentos ni circuit breaker. Bajo mucha carga el sistema se satura.">Baseline</button>
+        <button type="button" data-mode="retries" data-tip="Reintenta automáticamente los pedidos que fallan.">Reintentos</button>
+        <button type="button" data-mode="breaker" data-tip="Si un servicio falla varias veces, deja de llamarlo (evita cascadas de fallos).">Circuit breaker</button>
+        <button type="button" data-mode="kubernetes" data-tip="Cambia al cluster Kubernetes: usa HPA (autoescala) y liveness probes (reinicio automático).">Kubernetes</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="muted" id="mode-state">cargando…</span>
+      </div>
+      `,
+      { full: true })}
+
     ${card('Flujo de servicios en tiempo real',
       'Así trabaja el sistema en conjunto: order-service orquesta a los otros 4 servicios. Cada salto muestra su latencia (campo timings) y su estado (verde = ok, rojo = fallo, gris punteado = no alcanzado). Con "Detener / Levantar" apagas y enciendes cada servicio de verdad (afecta a todo el stack).',
       `
@@ -106,6 +121,56 @@ export function render(view) {
     if ($('f-auto').checked) { autoTimer = setInterval(runFlow, 3000); runFlow(); }
     else { clearInterval(autoTimer); autoTimer = null; }
   });
+
+  // ---- Modo de resiliencia ----
+  let runtime = 'compose';
+  let strategy = 'baseline';
+
+  async function loadModeState() {
+    try { strategy = (await API.getMode()).mode || 'baseline'; } catch (_) {}
+    try { runtime = (await API.getRuntimeMode()).mode || 'compose'; } catch (_) {}
+    renderModeState();
+  }
+
+  function renderModeState() {
+    view.querySelectorAll('#mode-seg button').forEach((b) => {
+      const isActive = b.dataset.mode === 'kubernetes'
+        ? runtime === 'kubernetes'
+        : (runtime === 'compose' && b.dataset.mode === strategy);
+      b.classList.toggle('active', isActive);
+    });
+    const env = runtime === 'kubernetes' ? 'Kubernetes' : 'Compose';
+    $('mode-state').innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>`;
+  }
+
+  view.querySelectorAll('#mode-seg button').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.mode;
+      try {
+        if (mode === 'kubernetes') {
+          const r = await API.getRuntimeMode();
+          if (!r.k8s_configured) {
+            toast('Kubernetes no está configurado (K8S_API_SERVER + certs en k8s/certs)', 'err');
+            return;
+          }
+          if (runtime !== 'kubernetes') {
+            if (!(await confirmDialog('Cambiar al cluster Kubernetes? El panel enrutará todas las llamadas al cluster (requiere minikube + stack desplegado).'))) return;
+            await API.setRuntimeMode('kubernetes');
+            toast('Entorno cambiado a Kubernetes', 'ok');
+          }
+        } else {
+          if (runtime === 'kubernetes') {
+            await API.setRuntimeMode('compose');
+          }
+          await API.setMode(mode);
+          toast('Estrategia aplicada: ' + mode, 'ok');
+        }
+        await loadModeState();
+      } catch (e) { toast('Error: ' + e.message, 'err'); }
+    });
+  });
+
+  loadModeState();
 
   // ---- Stop/start de servicios (real) ----
   view.querySelectorAll('.svc-btn').forEach((btn) => {
