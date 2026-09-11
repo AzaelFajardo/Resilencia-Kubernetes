@@ -200,8 +200,31 @@ export function render(view) {
     try {
       setFlowClass('order', 'pending');
       HOPS.forEach((k) => { setFlowClass(k, 'pending'); $('f-' + k + '-lat').textContent = '…'; });
+
+      const counts = await API.counts().catch(() => ({}));
+      if (!counts.user) {
+        msg.textContent = 'No hay usuarios registrados. Crea al menos un usuario desde la pestaña de Entidades.';
+        toast('No hay usuarios en la base de datos', 'err');
+        setFlowClass('order', 'done-err');
+        if ($('f-auto').checked) { $('f-auto').checked = false; clearInterval(autoTimer); autoTimer = null; }
+        return;
+      }
+      if (!counts.inventory) {
+        msg.textContent = 'No hay productos en inventario. Crea registros de inventario desde la pestaña de Entidades.';
+        toast('No hay inventario en la base de datos', 'err');
+        setFlowClass('order', 'done-err');
+        if ($('f-auto').checked) { $('f-auto').checked = false; clearInterval(autoTimer); autoTimer = null; }
+        return;
+      }
+
       const pid = await pickInStockProduct();
-      if (pid == null) { msg.textContent = 'sin productos con stock (genera inventario)'; return; }
+      if (pid == null) {
+        msg.textContent = 'Sin productos con stock (todos agotados). Repone el inventario desde Entidades.';
+        toast('Todos los productos están agotados', 'err');
+        setFlowClass('order', 'done-err');
+        if ($('f-auto').checked) { $('f-auto').checked = false; clearInterval(autoTimer); autoTimer = null; }
+        return;
+      }
       const r = await API.placeOrder(1, pid, 1);
       const oid = r.order && r.order.id != null ? r.order.id : null;
       msg.textContent = 'orden #' + (oid ?? '?') + ' · status: ' + r.status;
@@ -231,7 +254,7 @@ export function render(view) {
     HOPS.forEach((k) => { setFlowClass(k, 'pending'); $('f-' + k + '-lat').textContent = '…'; });
     const attempts = (r && r.attempts) || {};
     const t = r.timings || {};
-    const step = Math.max(retryDelay, 350);
+    const step = Math.max(retryDelay, 700);
     HOPS.forEach((k, i) => {
       const list = attempts[k] || [];
       const n = Math.max(list.length, 1);
@@ -277,14 +300,17 @@ export function render(view) {
   }
 
   async function pickInStockProduct() {
+    let prods;
     try {
-      const prods = await API.listEntities('products', 0, 50);
-      const inStock = (Array.isArray(prods) ? prods : []).filter((p) => (p.quantity ?? 0) > 0);
-      if (inStock.length) return inStock[0].product_id;
-    } catch (_) {}
-    // Fallback: si inventory-service está caído no se puede consultar el stock;
-    // usamos el producto 1 para que la orden llegue a reintentar igualmente.
-    return 1;
+      prods = await API.listEntities('products', 0, 50);
+    } catch (_) {
+      // Fallback: si inventory-service está caído no se puede consultar el stock;
+      // usamos el producto 1 para que la orden llegue a reintentar igualmente.
+      return 1;
+    }
+    const inStock = (Array.isArray(prods) ? prods : []).filter((p) => (p.quantity ?? 0) > 0);
+    if (inStock.length) return inStock[0].product_id;
+    return null;
   }
 
   async function refresh() {
