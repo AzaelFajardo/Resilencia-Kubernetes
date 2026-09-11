@@ -78,3 +78,18 @@ export function confirmDialog(message) {
 export function fmt(v, d = 3) {
   return v == null ? '—' : Number(v).toFixed(d);
 }
+
+export function fmtCompact(n) {
+  const num = Number(n);
+  if (n == null || isNaN(num)) return '—';
+  const abs = Math.abs(num);
+  if (abs < 1000) return String(Math.round(num));
+  const units = ['K', 'M', 'B'];
+  let u = -1;
+  let val = abs;
+  while (val >= 1000 && u < units.length - 1) { val /= 1000; u++; }
+  const sign = num < 0 ? '-' : '';
+  const rounded = Math.round(val * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return sign + text + units[u];
+}

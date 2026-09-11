@@ -215,6 +215,70 @@ async def _get(client: httpx.AsyncClient, url: str, timeout: float = 5.0):
         return 0, {"error": err_msg}
 
 
+# Short-lived cache for cluster reachability (ping /version). Avoids hammering
+# the API server on every /api/runtime-mode or /api/config poll while still
+# reflecting real outages within a few seconds.
+_K8S_REACH = {"ok": None, "ts": 0.0}
+_K8S_REACH_TTL = 10.0
+
+
+async def k8s_reachable() -> bool:
+    if not K8S_API_SERVER:
+        return False
+    now = time.time()
+    cached = _K8S_REACH.get("ok")
+    if cached is not None and now - _K8S_REACH["ts"] < _K8S_REACH_TTL:
+        return cached
+    try:
+        async with httpx.AsyncClient(cert=K8S_CERT, verify=False, timeout=1.5) as c:
+            r = await c.get(f"{K8S_API_SERVER}/version")
+            ok = r.status_code == 200
+    except Exception:
+        ok = False
+    _K8S_REACH.update(ok=ok, ts=time.time())
+    return ok
+
+
+def _scale_deployment_replicas(name: str, replicas: int) -> dict:
+    """Scale a Deployment's replicas through the cluster API server.
+
+    Synchronous on purpose (runs in FastAPI's worker thread, just like the
+    Docker SDK calls): it is shared by the REST /api/kubernetes/scale endpoint
+    and the Kubernetes branch of service_action (stop -> 0 / start -> 1).
+    When the Deployment has an HPA, its minReplicas is nudged to the requested
+    value so the autoscaler doesn't immediately scale the manual change back.
+    """
+    with httpx.Client(cert=K8S_CERT, verify=False, timeout=5.0) as client:
+        hpa_name = None
+        r = client.get(f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers")
+        if r.status_code == 200:
+            for item in r.json().get("items", []):
+                ref = item.get("spec", {}).get("scaleTargetRef") or {}
+                if ref.get("kind") == "Deployment" and ref.get("name") == name:
+                    hpa_name = item["metadata"]["name"]
+                    break
+
+        scale_url = f"{K8S_API_SERVER}/apis/apps/v1/namespaces/default/deployments/{name}/scale"
+        body = {"apiVersion": "autoscaling/v1", "kind": "Scale", "spec": {"replicas": replicas}}
+        r = client.put(scale_url, json=body, timeout=5.0)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"scale failed ({r.status_code}): {r.text[:300]}")
+
+        if hpa_name:
+            hpa_url = f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers/{hpa_name}"
+            try:
+                client.patch(
+                    hpa_url,
+                    json={"spec": {"minReplicas": replicas}},
+                    headers={"Content-Type": "application/merge-patch+json"},
+                    timeout=5.0,
+                )
+            except Exception:
+                pass  # best effort: HPA min tune must never block a manual scale
+
+        return {"deployment": name, "replicas": replicas, "hpa": hpa_name}
+
+
 @app.get("/api/health")
 async def health():
     """Health of all 5 services, queried in parallel with a short timeout."""
@@ -318,6 +382,7 @@ async def config():
     return {
         "grafana_url": GRAFANA_PUBLIC_URL,
         "k8s_available": bool(K8S_API_SERVER),
+        "k8s_reachable": await k8s_reachable(),
         "runtime_mode": RUNTIME_MODE,
     }
 
@@ -327,15 +392,16 @@ class RuntimeModeRequest(BaseModel):
 
 
 @app.get("/api/runtime-mode")
-def get_runtime_mode():
+async def get_runtime_mode():
     return {
         "mode": RUNTIME_MODE,
         "k8s_configured": bool(K8S_API_SERVER),
+        "k8s_reachable": await k8s_reachable(),
     }
 
 
 @app.post("/api/runtime-mode")
-def set_runtime_mode(req: RuntimeModeRequest):
+async def set_runtime_mode(req: RuntimeModeRequest):
     global RUNTIME_MODE
     mode = req.mode.strip().lower()
     if mode not in ("compose", "kubernetes"):
@@ -346,21 +412,31 @@ def set_runtime_mode(req: RuntimeModeRequest):
             detail="Kubernetes not configured (set K8S_API_SERVER and mount certs in k8s/certs/)",
         )
     RUNTIME_MODE = mode
-    return get_runtime_mode()
+    return await get_runtime_mode()
 
 
 @app.post("/api/services/{service}/{action}")
 def service_action(service: str, action: str):
-    """Stop/start a microservice container for real (via the Docker socket).
-
-    Sync (not async) on purpose: the Docker SDK calls are blocking, so
-    FastAPI runs this endpoint in a worker thread instead of blocking the
-    event loop. Stopping a service is reflected across the whole stack
-    (health checks fail, the order flow short-circuits, etc.)."""
+    """Stop/start a microservice container for real (via the Docker socket)
+    or scale its Kubernetes Deployment to 0/1 replicas."""
     if service not in SERVICES:
         raise HTTPException(status_code=400, detail=f"unknown service: {service}")
     if action not in ("stop", "start"):
         raise HTTPException(status_code=400, detail="action must be 'stop' or 'start'")
+
+    if RUNTIME_MODE == "kubernetes":
+        if not K8S_API_SERVER:
+            raise HTTPException(status_code=503, detail="Kubernetes not configured")
+        replicas = 0 if action == "stop" else 1
+        result = _scale_deployment_replicas(f"{service}-service", replicas)
+        return {
+            "service": service,
+            "action": action,
+            "deployment": result["deployment"],
+            "replicas": result["replicas"],
+            "hpa": result["hpa"],
+        }
+
     if _docker is None:
         raise HTTPException(status_code=503, detail="Docker socket not available")
 
@@ -438,41 +514,109 @@ async def kubernetes_status():
     # through) - hostname mismatch is expected here, not a real trust
     # issue, since this is a local-only dev cluster (see docs/00. setup.md).
     async with httpx.AsyncClient(cert=K8S_CERT, verify=False, timeout=5.0) as client:
+        urls = {
+            "version": f"{K8S_API_SERVER}/version",
+            "deployments": f"{K8S_API_SERVER}/apis/apps/v1/namespaces/default/deployments",
+            "pods": f"{K8S_API_SERVER}/api/v1/namespaces/default/pods",
+            "hpas": f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers",
+        }
         try:
-            pods_r = await client.get(f"{K8S_API_SERVER}/api/v1/namespaces/default/pods")
-            hpa_r = await client.get(f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers")
+            responses = await asyncio.gather(*(client.get(u) for u in urls.values()))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"cluster unreachable: {e}")
 
-        pods = []
-        for item in pods_r.json().get("items", []):
-            statuses = item.get("status", {}).get("containerStatuses", [{}])
-            cs = statuses[0] if statuses else {}
-            ready = cs.get("ready", False)
-            restarts = cs.get("restartCount", 0)
-            pods.append({
-                "name": item["metadata"]["name"],
-                "phase": item.get("status", {}).get("phase", "Unknown"),
-                "ready": ready,
-                "restarts": restarts,
-            })
+        by_key = {k: r for k, r in zip(urls, responses)}
+        reachable = all(r.status_code == 200 for r in responses)
 
+        version = None
+        if by_key["version"].status_code == 200:
+            v = by_key["version"].json()
+            version = v.get("gitVersion") or f"{v.get('major')}.{v.get('minor')}"
+
+        # HPA name by target deployment (order-service, payment-service)
+        hpa_by_target: dict[str, str] = {}
         hpas = []
-        for item in hpa_r.json().get("items", []):
-            spec = item.get("spec", {})
-            status = item.get("status", {})
-            current = None
-            for m in status.get("currentMetrics", []):
-                current = m.get("resource", {}).get("current", {}).get("averageUtilization")
-            hpas.append({
-                "name": item["metadata"]["name"],
-                "minReplicas": spec.get("minReplicas"),
-                "maxReplicas": spec.get("maxReplicas"),
-                "currentReplicas": status.get("currentReplicas"),
-                "currentCPU": current,
-                "targetCPU": spec.get("metrics", [{}])[0].get("resource", {}).get("target", {}).get("averageUtilization"),
-            })
-        return {"pods": pods, "hpas": hpas}
+        if by_key["hpas"].status_code == 200:
+            for item in by_key["hpas"].json().get("items", []):
+                spec = item.get("spec", {})
+                status = item.get("status", {})
+                target = (spec.get("scaleTargetRef") or {}).get("name")
+                current = None
+                for m in status.get("currentMetrics", []):
+                    current = m.get("resource", {}).get("current", {}).get("averageUtilization")
+                hpas.append({
+                    "name": item["metadata"]["name"],
+                    "target": target,
+                    "minReplicas": spec.get("minReplicas"),
+                    "maxReplicas": spec.get("maxReplicas"),
+                    "currentReplicas": status.get("currentReplicas"),
+                    "currentCPU": current,
+                    "targetCPU": spec.get("metrics", [{}])[0].get("resource", {}).get("target", {}).get("averageUtilization"),
+                })
+                if target:
+                    hpa_by_target[target] = item["metadata"]["name"]
+
+        deployments = []
+        if by_key["deployments"].status_code == 200:
+            for item in by_key["deployments"].json().get("items", []):
+                spec = item.get("spec", {})
+                status = item.get("status", {})
+                dep_name = item["metadata"]["name"]
+                deployments.append({
+                    "name": dep_name,
+                    "replicas": spec.get("replicas", 0),
+                    "readyReplicas": status.get("readyReplicas", 0),
+                    "availableReplicas": status.get("availableReplicas", 0),
+                    "unavailableReplicas": status.get("unavailableReplicas", 0),
+                    "updatedReplicas": status.get("updatedReplicas", 0),
+                    "hpa": hpa_by_target.get(dep_name),
+                })
+
+        pods = []
+        if by_key["pods"].status_code == 200:
+            for item in by_key["pods"].json().get("items", []):
+                statuses = item.get("status", {}).get("containerStatuses", [{}])
+                cs = statuses[0] if statuses else {}
+                labels = item.get("metadata", {}).get("labels", {})
+                pods.append({
+                    "name": item["metadata"]["name"],
+                    "app": labels.get("app"),
+                    "phase": item.get("status", {}).get("phase", "Unknown"),
+                    "ready": cs.get("ready", False),
+                    "restarts": cs.get("restartCount", 0),
+                    "podIP": item.get("status", {}).get("podIP"),
+                })
+
+        return {
+            "reachable": reachable,
+            "version": version,
+            "deployments": deployments,
+            "pods": pods,
+            "hpas": hpas,
+        }
+
+
+class ScaleRequest(BaseModel):
+    deployment: str
+    replicas: int
+
+
+@app.post("/api/kubernetes/scale")
+def kubernetes_scale(req: ScaleRequest):
+    """Scale a Deployment to the desired replica count (0–10).
+
+    If the Deployment has an HPA (order-service, payment-service), its
+    minReplicas is nudged so the autoscaler doesn't undo the manual change.
+    Sync on purpose (runs in a worker thread, same as _scale_deployment_replicas).
+    """
+    if not K8S_API_SERVER:
+        raise HTTPException(status_code=503, detail="Kubernetes not configured")
+    name = req.deployment.strip()
+    if not name.endswith("-service"):
+        raise HTTPException(status_code=400, detail="deployment must be a microservice (*-service)")
+    if not (0 <= req.replicas <= 10):
+        raise HTTPException(status_code=400, detail="replicas must be between 0 and 10")
+    return _scale_deployment_replicas(name, req.replicas)
 
 
 @app.get("/api/alerts")

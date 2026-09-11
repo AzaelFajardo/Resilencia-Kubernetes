@@ -310,7 +310,34 @@ input[type="number"] { width: 88px; }
 .flow .branch { display: flex; flex-direction: row; gap: 10px; flex-wrap: wrap; justify-content: center; }
 .flow .hop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .flow .lat { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 16px; font-weight: 600; }
+.flow .count { margin-top: 4px; font-size: 11px; font-weight: 600; color: var(--muted-2); min-height: 14px; }
 .flow .controls { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* ---- Kubernetes: réplicas de deployment + pods bajo cada nodo ---- */
+.flow .deploy-ctl {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px;
+  padding-top: 8px; border-top: 1px dashed var(--border-2);
+}
+.flow .deploy-ctl .dc-lbl { font-size: 11px; font-weight: 600; color: var(--muted-2); margin-right: 2px; }
+.flow .deploy-ctl .dc-count { min-width: 24px; text-align: center; font-weight: 800; font-size: 13px; }
+.flow .deploy-ctl .dc-ready { font-size: 11px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+.flow .deploy-ctl .btn { width: 26px; padding: 2px 0; font-size: 14px; line-height: 1.2; }
+.flow .replicas { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.flow .replica {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border-2); border-radius: 10px;
+  background: var(--panel); padding: 4px 8px; font-size: 11px;
+}
+.flow .replica.ok { border-color: var(--green); }
+.flow .replica.pending { border-color: var(--yellow); }
+.flow .replica.err { border-color: var(--red); }
+.flow .replica .rp-name { font-weight: 700; color: var(--fg); }
+.flow .replica .rp-badge { margin-left: auto; }
+.flow .replica .rp-restarts { color: var(--muted); font-weight: 600; }
+.flow .replica .rp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.flow .replica .rp-dot.up { background: var(--green); }
+.flow .replica .rp-dot.warn { background: var(--yellow); }
+.flow .replica .rp-dot.down { background: var(--red); }
 
 /* Highlighted row (recent orders) */
 .tbl tr.highlight td { background: rgba(50, 108, 229, 0.16); animation: pulse 1.2s ease-in-out 3; }

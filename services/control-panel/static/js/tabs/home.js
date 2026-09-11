@@ -2,7 +2,7 @@
 // ciclo de vida por servicio y resumen del sistema.
 
 import { API } from '../api.js';
-import { card, table, badge, dot, empty, esc, toast, confirmDialog } from '../ui.js';
+import { card, table, badge, dot, empty, esc, toast, confirmDialog, fmtCompact } from '../ui.js';
 import { mountRefreshControl } from '../interval.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
@@ -24,6 +24,7 @@ export function render(view) {
         <button class="btn" id="f-run">Probar orden</button>
         <label><input type="checkbox" id="f-auto"> auto (cada 3s)</label>
         <span id="f-msg" class="muted"></span>
+        <button class="btn danger sm" id="home-clear-all-counts" style="margin-left:auto">Limpiar Todo</button>
       </div>
       <div class="flow">
         <div class="node client">Cliente</div>
@@ -55,14 +56,6 @@ export function render(view) {
         'Estado en tiempo real de los 5 microservicios. Cada punto indica si responde a GET /health (verde = responde, rojo = caído).',
         table(['Servicio', 'Estado'], [])
           .replace('<tbody></tbody>', '<tbody id="home-health"></tbody>'))}
-      ${card('Conteos de registros',
-        'Número total de registros persistidos en PostgreSQL para cada entidad. Usa "Limpiar Todo" para vaciar la base de datos.',
-        table(['Entidad', 'Cantidad'], [])
-          .replace('<tbody></tbody>', '<tbody id="home-counts"></tbody>') +
-        `<div class="row" style="justify-content:flex-end;margin-top:10px">
-          <button class="btn danger sm" id="home-clear-all-counts">Limpiar Todo</button>
-         </div>`
-      )}
       ${card('Circuit breaker (order → payment)',
         'Mecanismo de resiliencia: si payment-service falla 3 veces seguidas, order-service deja de llamarlo (OPEN) y responde rápido en lugar de esperar. Tras 15s prueba con una sola petición (HALF_OPEN) y se cierra si tiene éxito.',
         '<div id="home-cb" class="muted">cargando…</div>')}
@@ -86,11 +79,21 @@ export function render(view) {
   let alertsInFlight = false;
   let retryDelay = 400;
   const healthMap = {};
+  let k8s = { reachable: false, version: null, deployments: [], pods: [], hpas: [] };
 
-  function node(key, hub) {
+function node(key, hub) {
     return `<div class="node ${hub ? 'hub' : ''}" id="f-${key}">
       <div class="hop"><span>${LABELS[key]}</span><span class="dot" id="f-${key}-dot"></span></div>
       <div class="lat" id="f-${key}-lat"></div>
+      <div class="count" id="f-${key}-count"></div>
+      <div class="deploy-ctl" id="f-${key}-ctl" hidden>
+        <span class="dc-lbl">réplicas</span>
+        <button class="btn sm secondary sc-down" data-svc="${key}" title="Reducir réplicas">−</button>
+        <span class="dc-count" id="f-${key}-replicas">?</span>
+        <button class="btn sm secondary sc-up" data-svc="${key}" title="Aumentar réplicas">+</button>
+        <span class="dc-ready" id="f-${key}-ready"></span>
+      </div>
+      <div class="replicas" id="f-${key}-list" hidden></div>
       <div class="controls"><button class="btn sm secondary svc-btn" data-svc="${key}" data-action="stop">Detener</button></div>
     </div>`;
   }
@@ -141,6 +144,14 @@ export function render(view) {
       const env = runtime === 'kubernetes' ? 'Kubernetes' : 'Compose';
       stateEl.innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>`;
     }
+    // Kubernetes shows live replica controls + pod cards under each node.
+    const isK8s = runtime === 'kubernetes';
+    SVC_KEYS.forEach((key) => {
+      const ctl = $('f-' + key + '-ctl');
+      if (ctl) ctl.hidden = !isK8s;
+      const list = $('f-' + key + '-list');
+      if (list) list.hidden = !isK8s;
+    });
   }
 
   view.querySelectorAll('#mode-seg button').forEach((btn) => {
@@ -181,9 +192,36 @@ export function render(view) {
       btn.disabled = true;
       try {
         const r = await API.serviceAction(svc, action);
-        toast(`${r.container} ${action === 'stop' ? 'detenido' : 'levantado'}`, 'ok');
+        const who = r.deployment || r.container || svc + '-service';
+        const verbs = { stop: ['detenido', 'escalado a 0'], start: ['levantado', 'escalado a 1'] };
+        const v = verbs[action];
+        toast(`${who} ${runtime === 'kubernetes' ? v[1] : v[0]}`, 'ok');
         setTimeout(refresh, 1500);
       } catch (e) { toast('Error: ' + e.message, 'err'); }
+      btn.disabled = false;
+    });
+  });
+
+  // ---- Escalado de réplicas (solo Kubernetes) ----
+  async function scaleReplicas(svc, delta) {
+    const dep = LABELS[svc];
+    const depMeta = k8s.deployments.find((d) => d.name === dep);
+    const current = depMeta ? depMeta.replicas : 0;
+    const next = Math.max(0, Math.min(10, current + delta));
+    if (next === current) return;
+    try {
+      const r = await API.kubernetesScale(dep, next);
+      toast(`${dep} → ${next} réplicas (hpa: ${r.hpa || '—'})`, 'ok');
+      refresh();
+    } catch (e) { toast('Error: ' + e.message, 'err'); }
+  }
+
+  view.querySelectorAll('.sc-down, .sc-up').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const svc = btn.dataset.svc;
+      const delta = btn.classList.contains('sc-up') ? 1 : -1;
+      btn.disabled = true;
+      await scaleReplicas(svc, delta);
       btn.disabled = false;
     });
   });
@@ -326,11 +364,22 @@ export function render(view) {
       refreshNodeHealth();
     } catch (_) {}
 
+    if (runtime === 'kubernetes') {
+      try {
+        k8s = await API.kubernetes();
+        renderK8s();
+      } catch (_) {}
+    }
+
     try {
       const c = await API.counts();
-      $('home-counts').innerHTML = Object.entries(c).map(([k, v]) =>
-        `<tr><td>${esc(k)}</td><td>${esc(v ?? '—')}</td></tr>`
-      ).join('');
+      SVC_KEYS.forEach((key) => {
+        const el = $('f-' + key + '-count');
+        if (el) {
+          el.textContent = fmtCompact(c[key]);
+          if (c[key] != null) el.title = key + '-service registros: ' + c[key];
+        }
+      });
     } catch (_) {}
 
     try {
@@ -362,6 +411,39 @@ export function render(view) {
         : empty('sin reglas de alerta cargadas');
     } catch (_) { $('home-alerts').textContent = 'no disponible'; }
     finally { alertsInFlight = false; }
+  }
+
+  function podPhaseBadge(p) {
+    if (p.phase === 'Running') return p.ready ? badge('Running', 'ok') : badge('Running', 'warn');
+    if (p.phase === 'Pending') return badge('Pending', 'warn');
+    if (p.phase === 'Succeeded') return badge('Succeeded', 'ok');
+    return badge(p.phase || 'Unknown', 'bad');
+  }
+
+  function renderK8s() {
+    if (runtime !== 'kubernetes') return;
+    SVC_KEYS.forEach((key) => {
+      const depName = LABELS[key];
+      const dep = k8s.deployments.find((d) => d.name === depName);
+      const pods = (k8s.pods || []).filter((p) => p.app === depName);
+
+      const countEl = $('f-' + key + '-replicas');
+      const readyEl = $('f-' + key + '-ready');
+      const listEl = $('f-' + key + '-list');
+      if (countEl) countEl.textContent = dep ? dep.replicas : '?';
+      if (readyEl) readyEl.textContent = dep ? `listos ${dep.readyReplicas}/${dep.replicas}` : '';
+      if (listEl) {
+        listEl.innerHTML = pods.map((p) => `
+          <div class="replica ${p.ready ? 'ok' : p.phase === 'Pending' ? 'pending' : 'err'}" title="${esc(p.name)}${p.podIP ? ' · ' + esc(p.podIP) : ''}">
+            <span class="rp-dot ${p.ready ? 'up' : p.phase === 'Pending' ? 'warn' : 'down'}"></span>
+            <span class="rp-name">${esc(p.name.split('-').slice(0, 2).join('-'))}</span>
+            <span class="rp-badge">${podPhaseBadge(p)}</span>
+            ${p.restarts ? `<span class="rp-restarts">reinicios: ${p.restarts}</span>` : ''}
+          </div>`).join('') || (dep && dep.replicas > 0
+            ? '<div class="muted sm">escalando…</div>'
+            : '<div class="muted sm">0 réplicas</div>');
+      }
+    });
   }
 
   function refreshNodeHealth() {

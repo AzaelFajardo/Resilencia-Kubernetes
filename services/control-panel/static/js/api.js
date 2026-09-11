@@ -46,6 +46,7 @@ export const API = {
   circuitBreaker: () => api('/api/circuit-breaker'),
   config: () => api('/api/config'),
   kubernetes: () => api('/api/kubernetes'),
+  kubernetesScale: (deployment, replicas) => post('/api/kubernetes/scale', { deployment, replicas }),
 
   chaosSet: (service, cfg) => post('/api/chaos', { service, ...cfg }),
   getChaos: (service) => api(`/api/chaos/${service}`),
