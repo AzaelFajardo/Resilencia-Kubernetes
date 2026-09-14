@@ -12,16 +12,26 @@ export function render(view) {
     </div>
 
     <div class="grid">
-      ${card('REINTENTOS (CONFIGURACION)',
-        'Parámetros de reintento de order-service cuando el sistema está en Modo Reintentos. Permite ajustar el número de reintentos y el tiempo de espera entre intentos.',
+      ${card('Tráfico continuo',
+        'Envía pedidos sin parar, uno tras otro, a la velocidad que elijas, hasta que lo detengas. Ideal para simular el uso normal del sistema y ver las métricas en vivo.',
         `
-        <div id="r-ret-notice" class="msg warn" style="display:none;margin-bottom:10px;padding:8px 12px;border-radius:8px;background:var(--warn-bg,#3a2f0f);color:var(--warn-fg,#f5a623);font-size:12px"></div>
+        <form id="s-form" class="row">
+          <label data-tip="Cuántos pedidos se envían cada segundo.">Pedidos por segundo <input id="s-rate-input" type="number" min="0.1" step="0.5" value="5"></label>
+          <label data-tip="Cuántos artículos compra cada pedido.">Artículos por pedido <input id="s-qty" type="number" min="1" value="1"></label>
+          <label data-tip="Reparte el tráfico entre esta cantidad de clientes (opcional; vacío = todos).">Nº de clientes <input id="s-clients" type="number" min="1" placeholder="opcional"></label>
+          <label data-tip="Detiene el tráfico después de esta duración (opcional; vacío = hasta que pulses Detener).">Duración (segundos) <input id="s-dur" type="number" min="1" placeholder="opcional"></label>
+        </form>
         <div class="row">
-          <label>reintentos <input id="r-ret-count" type="number" min="0" max="10" value="3"></label>
-          <label>espera (ms) <input id="r-ret-delay" type="number" min="0" value="100"></label>
-          <button class="btn sm" id="r-ret-save">Guardar</button>
+          <button class="btn" id="s-start">Empezar tráfico</button>
+          <button class="btn danger" id="s-stop">Detener</button>
+          <span id="s-state" class="muted"></span>
         </div>
-        <div class="msg" id="r-ret-msg"></div>
+        <table class="tbl">
+          <thead><tr><th>Pedidos enviados</th><th>Exitosos</th><th>Fallidos</th><th>Velocidad</th></tr></thead>
+          <tbody><tr>
+            <td id="s-sent">—</td><td id="s-success">—</td><td id="s-failed">—</td><td id="s-rate">—</td>
+          </tr></tbody>
+        </table>
       `)}
 
       ${card('Inyección de fallos por servicio (chaos)',
@@ -81,26 +91,16 @@ export function render(view) {
         <div class="msg" id="b-msg"></div>
         <pre class="pre" id="b-out" style="max-height:160px">—</pre>
       `)}
-      ${card('Tráfico continuo',
-        'Envía pedidos sin parar, uno tras otro, a la velocidad que elijas, hasta que lo detengas. Ideal para simular el uso normal del sistema y ver las métricas en vivo.',
+      ${card('REINTENTOS (CONFIGURACION)',
+        'Parámetros de reintento de order-service cuando el sistema está en Modo Reintentos. Permite ajustar el número de reintentos y el tiempo de espera entre intentos.',
         `
-        <form id="s-form" class="row">
-          <label data-tip="Cuántos pedidos se envían cada segundo.">Pedidos por segundo <input id="s-rate-input" type="number" min="0.1" step="0.5" value="5"></label>
-          <label data-tip="Cuántos artículos compra cada pedido.">Artículos por pedido <input id="s-qty" type="number" min="1" value="1"></label>
-          <label data-tip="Reparte el tráfico entre esta cantidad de clientes (opcional; vacío = todos).">Nº de clientes <input id="s-clients" type="number" min="1" placeholder="opcional"></label>
-          <label data-tip="Detiene el tráfico después de esta duración (opcional; vacío = hasta que pulses Detener).">Duración (segundos) <input id="s-dur" type="number" min="1" placeholder="opcional"></label>
-        </form>
+        <div id="r-ret-notice" class="msg warn" style="display:none;margin-bottom:10px;padding:8px 12px;border-radius:8px;background:var(--warn-bg,#3a2f0f);color:var(--warn-fg,#f5a623);font-size:12px"></div>
         <div class="row">
-          <button class="btn" id="s-start">Empezar tráfico</button>
-          <button class="btn danger" id="s-stop">Detener</button>
-          <span id="s-state" class="muted"></span>
+          <label>reintentos <input id="r-ret-count" type="number" min="0" max="10" value="3"></label>
+          <label>espera (ms) <input id="r-ret-delay" type="number" min="0" value="100"></label>
+          <button class="btn sm" id="r-ret-save">Guardar</button>
         </div>
-        <table class="tbl">
-          <thead><tr><th>Pedidos enviados</th><th>Exitosos</th><th>Fallidos</th><th>Velocidad</th></tr></thead>
-          <tbody><tr>
-            <td id="s-sent">—</td><td id="s-success">—</td><td id="s-failed">—</td><td id="s-rate">—</td>
-          </tr></tbody>
-        </table>
+        <div class="msg" id="r-ret-msg"></div>
       `)}
     </div>
   `;
