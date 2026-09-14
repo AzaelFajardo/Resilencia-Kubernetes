@@ -15,6 +15,18 @@ const LABELS = {
   notification: 'notification-service',
 };
 
+// Qué significa que cada regla de alerta de Prometheus esté encendida (firing).
+const ALERT_TIPS = {
+  ServiceDown:
+    'Se enciende cuando Prometheus no ha conseguido rastrear un microservicio durante al menos 1 minuto: el servicio no responde a las métricas, está detenido o no está desplegado.',
+  CircuitBreakerOpen:
+    'El circuit breaker de order-service hacia el servicio afectado está en OPEN: el servicio falló varias veces seguidas y, para evitar una cascada de fallos, order-service ha dejado de llamarlo (responde rápido con fallo controlado) hasta que se recupere.',
+  HighOrderLatencyP95:
+    'El p95 del endpoint POST /orders ha estado por encima de 1 segundo durante más de 2 minutos: el 95% de las órdenes tarda más de 1s en completarse. Suele indicar saturación, reintentos o tiempos de espera crecientes.',
+  HighOrderErrorRate:
+    'La tasa de errores HTTP 5xx de order-service supera el 5%. Solo captura errores reales de transporte/excepciones; los fallos de negocio simulados (pago rechazado, sin stock, fraude) responden HTTP 200 y no activan esta alerta.',
+};
+
 export function render(view) {
   view.innerHTML = `
     <div class="stack">
@@ -416,7 +428,10 @@ function node(key, hub) {
       const firing = rules.filter((r) => r.state === 'firing');
       $('ss-alerts').innerHTML = rules.length
         ? (firing.length ? `${badge(firing.length + ' en FIRING', 'bad')}` : '') +
-          rules.map((r) => `<span class="chip ${r.state}">${esc(r.name)}</span>`).join('')
+          rules.map((r) => {
+            const tip = ALERT_TIPS[r.name] || `Alerta ${r.name} activa: revisa la condición que la dispara.`;
+            return `<span class="chip ${r.state}" data-tip="${esc(tip)}">${esc(r.name)}</span>`;
+          }).join('')
         : '<span class="muted">sin alertas</span>';
     } catch (_) { $('ss-alerts').textContent = 'no disponible'; }
     finally { alertsInFlight = false; }
