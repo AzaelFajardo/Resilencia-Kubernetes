@@ -313,7 +313,11 @@ input[type="number"] { width: 88px; }
 .flow .count { margin-top: 4px; font-size: 11px; font-weight: 600; color: var(--muted-2); min-height: 14px; }
 .flow .controls { display: flex; justify-content: flex-end; margin-top: 8px; }
 
-/* ---- Kubernetes: réplicas de deployment + pods bajo cada nodo ---- */
+/* ---- Kubernetes: réplicas de deployment + pods bajo cada nodo ----
+   Nota: el JS marca/desmarca hidden según el modo. `hidden` debe ganar
+   siempre, aunque esa display sea flex. */
+.flow .deploy-ctl[hidden],
+.flow .replicas[hidden] { display: none !important; }
 .flow .deploy-ctl {
   display: flex; align-items: center; gap: 6px; margin-top: 8px;
   padding-top: 8px; border-top: 1px dashed var(--border-2);
