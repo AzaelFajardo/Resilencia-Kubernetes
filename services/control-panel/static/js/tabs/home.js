@@ -2,7 +2,7 @@
 // ciclo de vida por servicio y resumen del sistema.
 
 import { API } from '../api.js';
-import { card, table, badge, dot, empty, esc, toast, confirmDialog, fmtCompact } from '../ui.js';
+import { card, table, badge, esc, toast, confirmDialog, fmtCompact } from '../ui.js';
 import { mountRefreshControl } from '../interval.js';
 
 const SVC_KEYS = ['order', 'user', 'inventory', 'payment', 'notification'];
@@ -17,6 +17,7 @@ const LABELS = {
 
 export function render(view) {
   view.innerHTML = `
+    <div class="stack">
     ${card('Flujo de servicios en tiempo real',
       'Así trabaja el sistema en conjunto: order-service orquesta a los otros 4 servicios. Cada salto muestra su latencia (campo timings) y su estado (verde = ok, rojo = fallo, gris punteado = no alcanzado). En Modo Reintentos, si un salto falla order-service lo reintenta (reintentos × espera ms configurados en Pruebas): el nodo parpadea mostrando "intento i/N" y al final verás cuántos intentos necesitó. Con "Detener / Levantar" apagas y enciendes cada servicio de verdad (afecta a todo el stack).',
       `
@@ -41,6 +42,10 @@ export function render(view) {
           ${node('notification')}
         </div>
       </div>
+      <div class="status-strip">
+        <div class="ss-health" id="ss-health"></div>
+        <div class="ss-alerts" id="ss-alerts"></div>
+      </div>
       `,
       {
         full: true,
@@ -53,21 +58,12 @@ export function render(view) {
           </div>
         `
       })}
-
-    <div class="grid">
-      ${card('Salud de servicios',
-        'Estado en tiempo real de los 5 microservicios. Cada punto indica si responde a GET /health (verde = responde, rojo = caído).',
-        table(['Servicio', 'Estado'], [])
-          .replace('<tbody></tbody>', '<tbody id="home-health"></tbody>'))}
-      ${card('Alertas activas',
-        'Reglas de alerta de Prometheus. Se marcan en rojo (firing) cuando se incumple la condición durante el umbral de tiempo.',
-        '<div id="home-alerts" class="muted">cargando…</div>')}
+      ${card('Actividad reciente (órdenes)',
+        'Últimas órdenes procesadas por order-service. La fila resaltada es la orden que acabas de generar con "Probar orden".',
+        table(['ID', 'Usuario', 'Producto', 'Cant.', 'Estado'], [])
+          .replace('<tbody></tbody>', '<tbody id="home-recent"></tbody>'),
+        { full: true })}
     </div>
-    ${card('Actividad reciente (órdenes)',
-      'Últimas órdenes procesadas por order-service. La fila resaltada es la orden que acabas de generar con "Probar orden".',
-      table(['ID', 'Usuario', 'Producto', 'Cant.', 'Estado'], [])
-        .replace('<tbody></tbody>', '<tbody id="home-recent"></tbody>'),
-      { full: true })}
   `;
 
   const $ = (id) => view.querySelector('#' + id);
@@ -370,9 +366,10 @@ function node(key, hub) {
   async function refresh() {
     try {
       const h = await API.health();
-      $('home-health').innerHTML = Object.entries(h).map(([k, v]) =>
-        `<tr><td>${dot(v.up)}${esc(k)}-service</td><td>${v.up ? badge('UP', 'ok') : badge('DOWN', 'bad')}</td></tr>`
-      ).join('');
+      $('ss-health').innerHTML = SVC_KEYS.map((key) => {
+        const up = !!(h[key] && h[key].up);
+        return `<span class="ss-item"><span class="dot ${up ? 'up' : 'down'}"></span><span class="ss-name">${key}-service</span><span class="ss-state ${up ? 'up' : 'down'}">${up ? 'UP' : 'DOWN'}</span></span>`;
+      }).join('');
       SVC_KEYS.forEach((key) => {
         const v = h[key];
         healthMap[key] = !!(v && v.up);
@@ -417,11 +414,11 @@ function node(key, hub) {
       const a = await API.alerts();
       const rules = a.groups || [];
       const firing = rules.filter((r) => r.state === 'firing');
-      $('home-alerts').innerHTML = rules.length
-        ? (firing.length ? `<div style="margin-bottom:6px">${badge(firing.length + ' en FIRING', 'bad')}</div>` : '') +
+      $('ss-alerts').innerHTML = rules.length
+        ? (firing.length ? `${badge(firing.length + ' en FIRING', 'bad')}` : '') +
           rules.map((r) => `<span class="chip ${r.state}">${esc(r.name)}</span>`).join('')
-        : empty('sin reglas de alerta cargadas');
-    } catch (_) { $('home-alerts').textContent = 'no disponible'; }
+        : '<span class="muted">sin alertas</span>';
+    } catch (_) { $('ss-alerts').textContent = 'no disponible'; }
     finally { alertsInFlight = false; }
   }
 

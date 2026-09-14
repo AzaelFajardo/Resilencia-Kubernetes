@@ -343,6 +343,10 @@ input[type="number"] { width: 88px; }
 .flow .replica .rp-dot.warn { background: var(--yellow); }
 .flow .replica .rp-dot.down { background: var(--red); }
 
+/* En el diagrama de flujo solo se muestran los puntos rojos (servicio caído);
+   cuando el servicio está sano el punto verde no se renderiza. */
+.flow .dot.up { display: none; }
+
 /* ---- Circuit breaker badge (esquina superior derecha del card del flujo) ---- */
 .flow .cb-row {
   display: flex;
@@ -360,6 +364,41 @@ input[type="number"] { width: 88px; }
   border-radius: 999px;
   background: var(--panel);
 }
+
+/* ---- Barra de estado (salud + alertas) bajo el diagrama ---- */
+.status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-top: 1px dashed var(--border-2);
+  font-size: 12px;
+}
+.ss-health { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.ss-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.ss-name { white-space: nowrap; }
+.ss-state {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.ss-state.up { background: var(--ok-bg); color: var(--ok-fg); }
+.ss-state.down { background: var(--bad-bg); color: var(--bad-fg); }
+.ss-alerts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ---- Separación vertical entre bloques del Inicio ---- */
+.stack { display: flex; flex-direction: column; gap: 20px; }
 
 /* Highlighted row (recent orders) */
 .tbl tr.highlight td { background: rgba(50, 108, 229, 0.16); animation: pulse 1.2s ease-in-out 3; }
