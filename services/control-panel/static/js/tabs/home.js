@@ -26,6 +26,9 @@ export function render(view) {
         <span id="f-msg" class="muted"></span>
         <button class="btn danger sm" id="home-clear-all-counts" style="margin-left:auto">Limpiar Todo</button>
       </div>
+      <div class="cb-row" id="home-cb-row" hidden>
+        <div id="home-cb" class="cb-badge"></div>
+      </div>
       <div class="flow">
         <div class="node client">Cliente</div>
         <div class="arrow-down">↓</div>
@@ -56,9 +59,6 @@ export function render(view) {
         'Estado en tiempo real de los 5 microservicios. Cada punto indica si responde a GET /health (verde = responde, rojo = caído).',
         table(['Servicio', 'Estado'], [])
           .replace('<tbody></tbody>', '<tbody id="home-health"></tbody>'))}
-      ${card('Circuit breaker (order → payment)',
-        'Mecanismo de resiliencia: si payment-service falla 3 veces seguidas, order-service deja de llamarlo (OPEN) y responde rápido en lugar de esperar. Tras 15s prueba con una sola petición (HALF_OPEN) y se cierra si tiene éxito.',
-        '<div id="home-cb" class="muted">cargando…</div>')}
       ${card('Alertas activas',
         'Reglas de alerta de Prometheus. Se marcan en rojo (firing) cuando se incumple la condición durante el umbral de tiempo.',
         '<div id="home-alerts" class="muted">cargando…</div>')}
@@ -152,6 +152,22 @@ function node(key, hub) {
       const list = $('f-' + key + '-list');
       if (list) list.hidden = !isK8s;
     });
+    renderCbBadge();
+  }
+
+  // Circuit breaker badge: only visible in Circuit breaker mode (compose), in
+  // the top-right corner of the flow card, right below the "Limpiar Todo" row.
+  function renderCbBadge() {
+    const row = $('home-cb-row');
+    if (!row) return;
+    row.hidden = !(runtime === 'compose' && strategy === 'breaker');
+    if (row.hidden) return;
+    API.circuitBreaker()
+      .then((cb) => {
+        $('home-cb').innerHTML =
+          `${badge(cb.state, cb.state)} <span class="muted">fallos: ${cb.failures}/${cb.failure_threshold} · recuperación: ${cb.recovery_timeout}s</span>`;
+      })
+      .catch(() => { $('home-cb').textContent = 'no disponible'; });
   }
 
   view.querySelectorAll('#mode-seg button').forEach((btn) => {
@@ -383,17 +399,13 @@ function node(key, hub) {
     } catch (_) {}
 
     try {
-      const cb = await API.circuitBreaker();
-      $('home-cb').innerHTML =
-        `${badge(cb.state, cb.state)} <span class="muted">fallos: ${cb.failures}/${cb.failure_threshold} · recuperación: ${cb.recovery_timeout}s</span>`;
-    } catch (_) { $('home-cb').textContent = 'no disponible'; }
-
-    try {
       const recent = await API.recent('orders', 8);
       $('home-recent').innerHTML = recent.map((o) =>
         `<tr class="${o.id === highlightId ? 'highlight' : ''}"><td>${o.id}</td><td>${o.user_id}</td><td>${o.product_id}</td><td>${o.quantity}</td><td>${esc(o.status)}</td></tr>`
       ).join('') || `<tr><td colspan="5" class="muted">sin órdenes todavía</td></tr>`;
     } catch (_) {}
+
+    renderCbBadge();
   }
 
   // Alerts are polled on their own fast interval so they update immediately

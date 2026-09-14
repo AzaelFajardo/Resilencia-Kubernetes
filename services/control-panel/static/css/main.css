@@ -343,6 +343,24 @@ input[type="number"] { width: 88px; }
 .flow .replica .rp-dot.warn { background: var(--yellow); }
 .flow .replica .rp-dot.down { background: var(--red); }
 
+/* ---- Circuit breaker badge (esquina superior derecha del card del flujo) ---- */
+.flow .cb-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.flow .cb-row[hidden] { display: none; }
+.flow .cb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: var(--panel);
+}
+
 /* Highlighted row (recent orders) */
 .tbl tr.highlight td { background: rgba(50, 108, 229, 0.16); animation: pulse 1.2s ease-in-out 3; }
 @keyframes pulse { 0%, 100% { background: rgba(50, 108, 229, 0.14); } 50% { background: rgba(50, 108, 229, 0.32); } }
