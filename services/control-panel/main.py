@@ -193,6 +193,10 @@ def _k8s_service_proxy(key: str) -> str:
     return f"{K8S_API_SERVER}/api/v1/namespaces/{_NAMESPACE}/services/{key}-service:8000/proxy"
 
 
+def _k8s_pod_proxy(node: str) -> str:
+    return f"{K8S_API_SERVER}/api/v1/namespaces/{_NAMESPACE}/pods/{node}:8000/proxy"
+
+
 # ---------------------------------------------------------------------------
 # Orchestrator leader discovery (Fase 4: real failover).
 # The order-orchestration endpoints (/orders, /resilience/*, ...) are served by
@@ -210,6 +214,27 @@ def _invalidate_orchestrator_cache() -> None:
     _ORCHESTRATOR_CACHE.clear()
 
 
+async def _k8s_leader_pod(client: httpx.AsyncClient, key: str) -> str | None:
+    """Return the name of the pod of `key` that currently holds the lease.
+
+    The leader *service* proxy may land on a follower pod (round-robin), whose
+    /orchestrator/leader answer reports its own pod name even though it is not
+    the lease holder. Listing the pods and probing each one directly finds the
+    single pod carrying the lease, so the panel always routes to the leader.
+    """
+    try:
+        url = f"{K8S_API_SERVER}/api/v1/namespaces/{_NAMESPACE}/pods?labelSelector=app={key}-service"
+        r = await client.get(url, timeout=3.0)
+        pod_names = [p["metadata"]["name"] for p in r.json().get("items", [])] if r.status_code == 200 else []
+    except Exception:
+        return None
+    for name in pod_names:
+        code, body = await _get(client, f"{_k8s_pod_proxy(name)}/orchestrator/leader", timeout=1.2)
+        if code == 200 and body.get("enabled") and body.get("is_leader"):
+            return body.get("node") or name
+    return None
+
+
 async def _discover_orchestrator() -> tuple[str, dict]:
     mode = RUNTIME_MODE
     cached = _ORCHESTRATOR_CACHE.get(mode)
@@ -221,6 +246,7 @@ async def _discover_orchestrator() -> tuple[str, dict]:
         _ORCHESTRATOR_CACHE[mode] = ("order", info, time.time())
         return "order", info
 
+    info = None
     async with _client() as client:
         async def one(key: str):
             code, body = await _get(client, f"{_k8s_service_proxy(key)}/orchestrator/leader", timeout=1.2)
@@ -228,26 +254,46 @@ async def _discover_orchestrator() -> tuple[str, dict]:
 
         results = dict(await asyncio.gather(*(one(k) for k in SERVICES)))
 
-    alive = {k: v for k, v in results.items() if v}
-    if not alive:
-        raise HTTPException(status_code=503, detail="no orchestrator leader reachable")
+        alive = {k: v for k, v in results.items() if v}
+        if not alive:
+            raise HTTPException(status_code=503, detail="no orchestrator leader reachable")
 
-    enabled_leaders = [k for k, v in alive.items() if v.get("enabled") and v.get("is_leader")]
-    if enabled_leaders:
-        winner = max(enabled_leaders, key=lambda k: int(alive[k].get("priority", 0)))
-    else:
-        winner = "order" if "order" in alive else max(alive, key=lambda k: int(alive[k].get("priority", 0)))
+        enabled_leaders = [k for k, v in alive.items() if v.get("enabled") and v.get("is_leader")]
+        if enabled_leaders:
+            winner = max(enabled_leaders, key=lambda k: int(alive[k].get("priority", 0)))
+        else:
+            winner = "order" if "order" in alive else max(alive, key=lambda k: int(alive[k].get("priority", 0)))
 
-    _ORCHESTRATOR_CACHE[mode] = (winner, alive.get(winner), time.time())
-    return winner, alive.get(winner)
+        info = alive.get(winner)
+        if not (info and info.get("enabled") and info.get("is_leader")):
+            # Service proxy answered from a follower pod; resolve the lease holder.
+            resolved = await _k8s_leader_pod(client, winner)
+            if resolved:
+                info = {**info, "node": resolved, "is_leader": True}
+            elif info is not None:
+                info = dict(info)
+
+    _ORCHESTRATOR_CACHE[mode] = (winner, info, time.time())
+    return winner, info
 
 
 async def orchestrator_base() -> str:
-    """Base URL of the current orchestrator (leader in k8s, order-service in compose)."""
-    key, _ = await _discover_orchestrator()
-    if RUNTIME_MODE == "kubernetes":
-        return _k8s_service_proxy(key)
-    return SERVICES[key]
+    """Base URL of the current orchestrator (leader pod in k8s, order-service in compose).
+
+    With replicas of the leader service running, only the pod that holds the
+    leadership lease answers the leader-guarded endpoints (/orders, /simulate,
+    /resilience/*). Routing through the Service would round-robin across pods
+    and hit "not the current orchestrator leader" on the followers, so the panel
+    targets the leader *pod* directly via the Kubernetes pod proxy.
+    """
+    key, info = await _discover_orchestrator()
+    if RUNTIME_MODE != "kubernetes":
+        return SERVICES[key]
+    node = (info or {}).get("node")
+    if node:
+        return _k8s_pod_proxy(node)
+    # Fallback: no pod name reported (e.g. during a rolling upgrade) -> Service.
+    return _k8s_service_proxy(key)
 
 
 async def _entity_base(svc: str) -> str:

@@ -74,20 +74,30 @@ confirmación por entidad en las tablas (la API ya existe).
   Grafana/alertas, hace falta `cadvisor` (o `node-exporter`) en Compose +
   Prometheus.
 
-## 5. Kubernetes — solo lectura, pero ya multiplataforma
+## 5. Kubernetes — acciones + enrutado al líder (resuelto en Fase 5)
 
-- ⚠️ `/api/kubernetes` lee pods + HPA del API server de minikube pero:
-  - sin botones de acción (borrar pod, escalar, logs);
-  - `verify=False` (cert emitido para hostname de minikube, no para
-    `host.docker.internal`) — aceptable en cluster local de estudio;
-  - solo namespace `default`.
+- ✅ **Acciones (Fase 5):** ya no es solo lectura. El panel expone
+  `POST /api/kubernetes/scale` (escalar Deployment) y
+  `DELETE /api/kubernetes/pod` (borrar pod → self-healing del ReplicaSet),
+  con historial de réplicas (`/api/kubernetes/history`) y selector de
+  namespace (`/api/kubernetes/namespaces`).
+- ✅ **Enrutado al pod líder (fix Fase 5):** los endpoints guarded de
+  orquestación (`/orders`, `/simulate/*`, `/resilience/*`) solo los sirve el
+  pod que tiene el lease. Enrutar por Service proxy hacía round-robin entre
+  réplicas → 503 `"not the current orchestrator leader"` en ~50% de requests.
+  El panel ahora resuelve el pod líder **de forma determinista**
+  (`_k8s_leader_pod()`: lista los pods del servicio líder y sondea a cada uno
+  hasta el que reporta `is_leader: true`) y le apunta con el pod proxy.
+  Detalles del procedimiento en `docs/TOOLING.md` → "Leader pod routing".
+- ⚠️ Todavía: `verify=False` (cert emitido para hostname de minikube, no para
+  `host.docker.internal`) — aceptable en cluster local de estudio; y la IP del
+  API server de minikube es dinámica (documentada en `.env.example`).
 - ✅ (Fase I3, parcial) **Portabilidad resuelta**: la integración es opt-in
   y funciona en Windows/macOS/Linux.
   - `control-panel` ya no monta rutas Windows hardcodeadas: monta el
     directorio `./k8s/certs/` (gitignored, vacío por defecto) en `/kube`.
   - `K8S_API_SERVER` se lee de `.env` (vacío = panel desactivado; el panel
-    responde "Kubernetes not configured"). Antes estaba hardcodeado a
-    `https://host.docker.internal:${K8S_API_PORT:-51311}`.
+    responde "Kubernetes not configured").
   - Se añadió `extra_hosts: host.docker.internal:host-gateway` para que
     `host.docker.internal` resuelva también en Linux.
   - Los certificados (`K8S_CA_FILE`, `K8S_CLIENT_CERT_FILE`,
@@ -95,6 +105,10 @@ confirmación por entidad en las tablas (la API ya existe).
   - Pendiente: el puerto del API server de minikube sigue siendo dinámico
     (se documenta en `.env.example` cómo obtenerlo), y falta leer el
     kubeconfig automáticamente.
+  - Gotcha conocido (recuperación): si el panel arranca con minikube caído,
+    Docker le asigna la IP `192.168.49.2` del nodo (misma bridge network) y
+    `minikube start` falla con "Address already in use". Solución y orden de
+    recuperación en `docs/TOOLING.md` → "minikube came back Stopped".
 
 ## 6. Grafana — embebido pero simplificado
 

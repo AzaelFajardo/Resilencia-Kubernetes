@@ -301,6 +301,89 @@ in each service):
   from Prometheus.
 - `GET /api/targets` (control-panel) — Prometheus scrape targets and health.
 
+## Kubernetes cluster operations (Phase 6 / Fase 5 E2E)
+
+The smaller truth of living with a minikube cluster while the shared
+orchestrator module (Fase 4) and the control-panel evolve:
+
+### Rebuild + redeploy a service image (after editing `shared/` or a service)
+
+The microservice images bake in `services/shared/orchestrator.py`, so a code
+change there requires a full rebuild + reload into the cluster node:
+
+```bash
+for s in order user inventory payment notification; do
+  docker build -q -t ${s}-service:latest -f services/${s}-service/Dockerfile services
+  minikube ssh "docker rmi ${s}-service:latest"        # force reload, avoids stale layer cache
+  minikube image load ${s}-service:latest
+done
+kubectl rollout restart deployment $(kubectl get deploy -o name | grep -E 'order|user|inventory|payment|notification')
+```
+
+The HPA will fight a `kubectl scale ... --replicas=` down to *below* the
+autoscaler's `minReplicas` (minikube's HPA rejects `minReplicas: 0` unless an
+Object/External metric exists), so to fully stop a service for a failover demo,
+either delete its HPA first (remember to re-apply `k8s/resilience/hpa.yaml`
+afterwards) or scale to its min.
+
+### Rebuild + restart the control-panel
+
+`main.py` is baked into the image; the static JS rides a volume (`ro`) and does
+**not** need a rebuild. `docker compose up -d --build control-panel`, then
+re-enable the Kubernetes runtime mode — it is an in-memory toggle that resets
+to Compose mode on every container start:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"mode":"kubernetes"}' http://localhost:8105/api/runtime-mode
+```
+
+### minikube came back Stopped / "Address already in use" on start
+
+The control-panel container joins the external `minikube` Docker bridge
+(`compose.yml` `networks.minikube`). That subnet is `192.168.49.0/24` and the
+kube-apiserver lives at node IP `192.168.49.2`; if the VM is down when the
+container restarts, Docker assigns the control-panel the *same* `192.168.49.2`
+and `docker start minikube` fails (`Address already in use`). Recovery order:
+
+```bash
+docker compose stop control-panel   # release the stolen 192.168.49.2
+docker start minikube               # VM takes 192.168.49.2 back
+minikube start                      # bring kubelet/apiserver up (pod states persist)
+docker compose start control-panel  # joins the bridge on a fresh DHCP address
+```
+
+### Leader pod routing (why the panel no longer 503s)
+
+With replicas running, only the pod holding the leadership lease serves the
+guarded order endpoints; the rest answer `503 "not the current
+orchestrator leader"`. Routing through a Service proxy round-robins across all
+replicas (hits siblings), and even "route to the leader pod" was wrong when the
+`node` came from whichever random pod answered discovery — a follower reports
+its **own** pod name. The panel now:
+
+- reads `node` (pod name) from each `/orchestrator/leader` response
+  (`LeaderElection` exposes it via `HOSTNAME` in `services/shared/orchestrator.py`);
+- if the discovery answer was not `is_leader: true`, lists the leader service's
+  pods (`?labelSelector=app=<service>`, `_k8s_leader_pod()`) and probes each
+  one directly until it finds the lease holder;
+- targets that exact pod with `…/api/v1/namespaces/default/pods/<pod>:8000/proxy`.
+
+Only leaders respond positively to a *deterministic pod probe*, so this is
+self-consistent even mid-failover; the `_ORCHESTRATOR_CACHE` (5s TTL) absorbs
+the transition.
+
+### E2E evidence (Fase 5, run against this stack)
+
+- Scale up/down, delete pod → ReplicaSet self-heals (readiness probes).
+- Load simulation `POST /api/orders/simulate/start {"rate":40,"clients":10}`:
+  625 orders sent, 605 success; `order-service-hpa` scaled 1 → 3 (70% CPU).
+- Stop the leader: scale `order-service` to 0 (HPA removed temporarily) →
+  leadership moves to `payment-service` within ~1 lease; `POST /api/orders`
+  and `/api/counts` keep working through the new leader pod. Restore the
+  deployment (re-apply HPA, scale to 1) → leadership returns to `order-service`
+  automatically (priority 100 > 80).
+
 ## Process notes (things that would otherwise be re-discovered the hard way)
 
 - **Seed stock is small on purpose** (`db/init.sql` gives product 1 only

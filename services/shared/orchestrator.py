@@ -1238,6 +1238,9 @@ class LeaderElection:
         self.heartbeat_seconds = heartbeat_seconds
         self.lease_seconds = lease_seconds
         self.node_id = str(uuid.uuid4())
+        # Kubernetes sets HOSTNAME to the pod name; lets the control-panel route
+        # directly to whichever pod holds the leadership lease.
+        self.node = os.environ.get("HOSTNAME") or ""
 
         explicit = os.environ.get("LEADER_ELECTION", "").strip().lower()
         if explicit in ("1", "true", "yes", "on", "enabled"):
@@ -1256,6 +1259,7 @@ class LeaderElection:
         return {
             "service": self.service_name,
             "node_id": self.node_id,
+            "node": self.node,
             "priority": self.priority,
             "enabled": self.enabled,
             "is_leader": self.is_leader,

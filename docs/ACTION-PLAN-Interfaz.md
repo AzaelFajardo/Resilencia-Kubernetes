@@ -57,19 +57,27 @@ número fijo) y enviar peticiones de forma flexible desde la UI.
 
 **Goal:** cerrar los gaps de portabilidad y "solo lectura" del panel de K8s.
 
-**Estado (2026-09-09):** el paso 1 (portabilidad) ya está hecho — ver
-`docs/control-panel-limitations.md` §5. Quedan el paso 2 (acciones) y el
-paso 3 (verificación TLS).
+**Estado (2026-09-15):** el paso 1 (portabilidad) y el paso 2 (acciones) ya
+están hechos — ver `docs/control-panel-limitations.md` §5. Además, en la
+verificación E2E de la Fase 5 se arregló el **enrutado al pod líder**: el panel
+resuelve de forma determinista qué pod tiene el lease de orquestación
+(`_k8s_leader_pod()` + pod proxy), evitando los 503 "not the current
+orchestrator leader" que el round-robin del Service producía con réplicas.
+Queda solo el paso 3 (verificación TLS).
 
 **Steps:**
 1. Quitar rutas/puertos hardcodeados (`C:\Users\vlaweirna\...`,
    `K8S_API_PORT=51311`) — leer el kubeconfig dinámicamente o exponerlo
-   100% vía variables de entorno documentadas en `.env.example`.
+   100% vía variables de entorno documentadas en `.env.example`. ✅ hecho
+   (env vars en `.env.example`; `K8S_API_SERVER` vacío = desactivado).
 2. Agregar acción "borrar pod" (botón por fila, con confirmación) y
-   selector de namespace (hoy fijo a `default`).
+   selector de namespace (hoy fijo a `default`). ✅ hecho:
+   `POST /api/kubernetes/scale`, `DELETE /api/kubernetes/pod`,
+   `GET /api/kubernetes/namespaces`, historial en `/api/kubernetes/history`.
 3. Evaluar reemplazar el `verify=False` por una verificación real (usar el
    hostname correcto vía SNI override) si el tiempo lo permite; si no,
    dejarlo documentado como aceptado (cluster local de estudio).
+   ⚠️ Pendiente (aceptado como deuda de cluster de estudio).
 
 **Files:** `services/control-panel/main.py`, `compose.yml`, `.env.example`.
 

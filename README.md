@@ -389,11 +389,28 @@ kubectl apply -f k8s/base/
 kubectl apply -f k8s/resilience/hpa.yaml
 ```
 
-Los 5 microservicios tienen liveness/readiness probes; `order-service-hpa` y
-`payment-service-hpa` autoescalan (min 1 / max 5 replicas, 70% CPU). Para usar
+Los 5 microservicios tienen liveness/readiness probes y **leader election** de
+fondo (Fase 4): una sola réplica por servicio tiene el "lease" de orquestación
+y sirve los endpoints guarded (`/orders`, `/simulate/*`, `/resilience/*`); si
+ese pod cae, otra réplica toma el liderazgo (prioridad: order=100, payment=80,
+inventory=60, user=40, notification=20). `order-service-hpa` y
+`payment-service-hpa` autoescalan (min 1 / max 5 replicas, 70% CPU). El panel
+de control expone acciones (escalar, borrar pod) y enruta el tráfico de
+orquestación **al pod líder** (no a un Service genérico), eliminando los 503 de
+"not the current orchestrator leader" con réplicas. Para usar
 `cli.py` contra el cluster en vez de Compose, ver "Targeting `cli.py` at the
 Kubernetes cluster" en `docs/TOOLING.md`. Resultados completos (HPA, MTTR,
 hallazgos) en `docs/tests/kubernetes-results.md` y `docs/tests/fault-*-results.md`.
+
+### Verificación E2E (Fase 5)
+
+Escenarios verificados contra el panel (`http://localhost:8105`, modo
+`kubernetes`):
+
+1. **Escalar ±** — `POST /api/kubernetes/scale {"deployment":"order-service","replicas":N}`; el panel refleja el cambio (el HPA sobreescribe en ~5 min si baja del mínimo).
+2. **Borrar pod / self-healing** — `DELETE /api/kubernetes/pod {"deployment":"order-service",...}`; el ReplicaSet lo recrea desde cero (probes readiness/liveness).
+3. **Carga + HPA** — `POST /api/orders/simulate/start {"rate":40,"clients":10}` → `order-service-hpa` escala 1→3 (70% CPU). Resultado observado: 625 órdenes enviadas, 605 éxito. Parar con `/api/orders/simulate/stop`.
+4. **Takeover del líder** — escalar `order-service` a 0 (con su HPA temporalmente eliminado; el autoscaler no permite min 0): liderazgo pasa a `payment-service` en ~1 lease y `/api/orders` + `/api/counts` siguen funcionando vía el nuevo líder. Al restaurar (`kubectl apply -f k8s/resilience/hpa.yaml` + scale a 1), el liderazgo regresa solo a `order-service`.
 
 ## Configuracion de la base de datos
 
