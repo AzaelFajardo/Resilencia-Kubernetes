@@ -263,12 +263,19 @@ services:
       - inventory-service
       - payment-service
       - notification-service
-    networks: [app-net]
+    networks:
+      - app-net
+      - minikube
 
 # Shared bridge network for local service-to-service communication.
 networks:
   app-net:
     driver: bridge
+  # External networking bridge created by "minikube start --driver=docker".
+  # Puts the control-panel container on the cluster network so it can reach
+  # the kube-apiserver (K8S_API_SERVER) and port-forwarded services directly.
+  minikube:
+    external: true
 
 # Persistent volumes.
 volumes:

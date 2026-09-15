@@ -47,6 +47,12 @@ K8S_CERT = (
 # and Prometheus are reached via /api/v1/namespaces/default/services/.../proxy).
 RUNTIME_MODE = "compose"
 
+# Rolling in-memory sample buffer of Deployment replica counts (per namespace +
+# deployment), used by the Kubernetes tab to draw auto-scaling live charts.
+# Each GET /api/kubernetes appends one sample for every Deployment present.
+_K8S_HISTORY: dict[tuple[str, str], list[dict]] = {}
+_K8S_HISTORY_LIMIT = 240
+
 import concurrent.futures
 import time
 
@@ -239,7 +245,7 @@ async def k8s_reachable() -> bool:
     return ok
 
 
-def _scale_deployment_replicas(name: str, replicas: int) -> dict:
+def _scale_deployment_replicas(name: str, replicas: int, namespace: str = "default") -> dict:
     """Scale a Deployment's replicas through the cluster API server.
 
     Synchronous on purpose (runs in FastAPI's worker thread, just like the
@@ -250,7 +256,8 @@ def _scale_deployment_replicas(name: str, replicas: int) -> dict:
     """
     with httpx.Client(cert=K8S_CERT, verify=False, timeout=5.0) as client:
         hpa_name = None
-        r = client.get(f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers")
+        hpa_url = f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/{namespace}/horizontalpodautoscalers"
+        r = client.get(hpa_url)
         if r.status_code == 200:
             for item in r.json().get("items", []):
                 ref = item.get("spec", {}).get("scaleTargetRef") or {}
@@ -258,14 +265,14 @@ def _scale_deployment_replicas(name: str, replicas: int) -> dict:
                     hpa_name = item["metadata"]["name"]
                     break
 
-        scale_url = f"{K8S_API_SERVER}/apis/apps/v1/namespaces/default/deployments/{name}/scale"
-        body = {"apiVersion": "autoscaling/v1", "kind": "Scale", "spec": {"replicas": replicas}}
+        scale_url = f"{K8S_API_SERVER}/apis/apps/v1/namespaces/{namespace}/deployments/{name}/scale"
+        body = {"apiVersion": "autoscaling/v1", "kind": "Scale", "metadata": {"name": name}, "spec": {"replicas": replicas}}
         r = client.put(scale_url, json=body, timeout=5.0)
         if r.status_code >= 400:
             raise HTTPException(status_code=502, detail=f"scale failed ({r.status_code}): {r.text[:300]}")
 
         if hpa_name:
-            hpa_url = f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers/{hpa_name}"
+            hpa_url = f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/{namespace}/horizontalpodautoscalers/{hpa_name}"
             try:
                 client.patch(
                     hpa_url,
@@ -506,19 +513,20 @@ def disk():
 
 
 @app.get("/api/kubernetes")
-async def kubernetes_status():
+async def kubernetes_status(namespace: str = "default"):
     if not K8S_API_SERVER:
         raise HTTPException(status_code=503, detail="Kubernetes not configured")
     # verify=False: the cluster cert is issued for the minikube hostname/IP,
     # not for host.docker.internal (the address this container reaches it
     # through) - hostname mismatch is expected here, not a real trust
     # issue, since this is a local-only dev cluster (see docs/00. setup.md).
+    ns = namespace.strip() or "default"
     async with httpx.AsyncClient(cert=K8S_CERT, verify=False, timeout=5.0) as client:
         urls = {
             "version": f"{K8S_API_SERVER}/version",
-            "deployments": f"{K8S_API_SERVER}/apis/apps/v1/namespaces/default/deployments",
-            "pods": f"{K8S_API_SERVER}/api/v1/namespaces/default/pods",
-            "hpas": f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers",
+            "deployments": f"{K8S_API_SERVER}/apis/apps/v1/namespaces/{ns}/deployments",
+            "pods": f"{K8S_API_SERVER}/api/v1/namespaces/{ns}/pods",
+            "hpas": f"{K8S_API_SERVER}/apis/autoscaling/v2/namespaces/{ns}/horizontalpodautoscalers",
         }
         try:
             responses = await asyncio.gather(*(client.get(u) for u in urls.values()))
@@ -562,7 +570,7 @@ async def kubernetes_status():
                 spec = item.get("spec", {})
                 status = item.get("status", {})
                 dep_name = item["metadata"]["name"]
-                deployments.append({
+                dep = {
                     "name": dep_name,
                     "replicas": spec.get("replicas", 0),
                     "readyReplicas": status.get("readyReplicas", 0),
@@ -570,7 +578,13 @@ async def kubernetes_status():
                     "unavailableReplicas": status.get("unavailableReplicas", 0),
                     "updatedReplicas": status.get("updatedReplicas", 0),
                     "hpa": hpa_by_target.get(dep_name),
-                })
+                }
+                deployments.append(dep)
+                # Append a live sample for the auto-scaling history chart.
+                buf = _K8S_HISTORY.setdefault((ns, dep_name), [])
+                buf.append({"t": time.time(), "replicas": dep["replicas"], "ready": dep["readyReplicas"]})
+                if len(buf) > _K8S_HISTORY_LIMIT:
+                    del buf[: len(buf) - _K8S_HISTORY_LIMIT]
 
         pods = []
         if by_key["pods"].status_code == 200:
@@ -596,9 +610,43 @@ async def kubernetes_status():
         }
 
 
+@app.get("/api/kubernetes/namespaces")
+async def kubernetes_namespaces():
+    """List cluster namespaces for the namespace <select> in the Kubernetes tab."""
+    if not K8S_API_SERVER:
+        raise HTTPException(status_code=503, detail="Kubernetes not configured")
+    async with httpx.AsyncClient(cert=K8S_CERT, verify=False, timeout=5.0) as client:
+        r = await client.get(f"{K8S_API_SERVER}/api/v1/namespaces")
+        if r.status_code != 200:
+            return {"namespaces": ["default"]}
+        names = sorted(
+            i["metadata"]["name"]
+            for i in r.json().get("items", [])
+            if i["metadata"]["name"] != "kube-node-lease"
+        )
+        return {"namespaces": names}
+
+
+@app.get("/api/kubernetes/history")
+async def kubernetes_history(namespace: str = "default", deployment: str = ""):
+    """Rolling replica-count time series recorded by GET /api/kubernetes.
+
+    Lets the Kubernetes tab draw live auto-scaling charts: send the HPA
+    (order-service / payment-service) a burst of orders and watch replicas
+    climb from 1 up to 4-5, then fall back as CPU cools down.
+    """
+    ns = namespace.strip() or "default"
+    dep = deployment.strip()
+    if not dep:
+        raise HTTPException(status_code=400, detail="deployment query param required")
+    buf = _K8S_HISTORY.get((ns, dep), [])
+    return {"deployment": dep, "namespace": ns, "series": buf}
+
+
 class ScaleRequest(BaseModel):
     deployment: str
     replicas: int
+    namespace: str = "default"
 
 
 @app.post("/api/kubernetes/scale")
@@ -612,11 +660,37 @@ def kubernetes_scale(req: ScaleRequest):
     if not K8S_API_SERVER:
         raise HTTPException(status_code=503, detail="Kubernetes not configured")
     name = req.deployment.strip()
+    ns = req.namespace.strip() or "default"
     if not name.endswith("-service"):
         raise HTTPException(status_code=400, detail="deployment must be a microservice (*-service)")
     if not (0 <= req.replicas <= 10):
         raise HTTPException(status_code=400, detail="replicas must be between 0 and 10")
-    return _scale_deployment_replicas(name, req.replicas)
+    return _scale_deployment_replicas(name, req.replicas, ns)
+
+
+class DeletePodRequest(BaseModel):
+    name: str
+    namespace: str = "default"
+
+
+@app.delete("/api/kubernetes/pod")
+def kubernetes_delete_pod(req: DeletePodRequest):
+    """Delete a pod by name (Kubernetes recreates it via the Deployment/ReplicaSet).
+
+    Used to test liveness probes: the pod is terminated and a new one starts
+    in its place, verifying the self-healing flow.
+    """
+    if not K8S_API_SERVER:
+        raise HTTPException(status_code=503, detail="Kubernetes not configured")
+    ns = req.namespace.strip() or "default"
+    with httpx.Client(cert=K8S_CERT, verify=False, timeout=5.0) as client:
+        url = f"{K8S_API_SERVER}/api/v1/namespaces/{ns}/pods/{req.name}"
+        r = client.delete(url, timeout=5.0)
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"pod '{req.name}' not found in namespace '{ns}'")
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"delete failed ({r.status_code}): {r.text[:300]}")
+        return {"deleted": req.name, "namespace": ns}
 
 
 @app.get("/api/alerts")

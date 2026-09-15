@@ -45,8 +45,14 @@ export const API = {
   alerts: () => api('/api/alerts'),
   circuitBreaker: () => api('/api/circuit-breaker'),
   config: () => api('/api/config'),
-  kubernetes: () => api('/api/kubernetes'),
-  kubernetesScale: (deployment, replicas) => post('/api/kubernetes/scale', { deployment, replicas }),
+  kubernetes: (namespace = 'default') => api(`/api/kubernetes?namespace=${encodeURIComponent(namespace)}`),
+  kubernetesScale: (deployment, replicas, namespace = 'default') => post('/api/kubernetes/scale', { deployment, replicas, namespace }),
+  kubernetesDeletePod: (name, namespace = 'default') => api('/api/kubernetes/pod', { method: 'DELETE', headers: JSON_HEADERS, body: JSON.stringify({ name, namespace }) }),
+  kubernetesHistory: (deployment, namespace = 'default') => api(`/api/kubernetes/history?deployment=${encodeURIComponent(deployment)}&namespace=${encodeURIComponent(namespace)}`),
+  kubernetesNamespaces: async () => {
+    const r = await api('/api/kubernetes/namespaces');
+    return r.namespaces ?? ['default'];
+  },
 
   chaosSet: (service, cfg) => post('/api/chaos', { service, ...cfg }),
   getChaos: (service) => api(`/api/chaos/${service}`),

@@ -343,6 +343,16 @@ input[type="number"] { width: 88px; }
 .flow .replica .rp-dot.warn { background: var(--yellow); }
 .flow .replica .rp-dot.down { background: var(--red); }
 
+/* Botón para borrar un pod desde el diagrama y desde la pestaña Kubernetes. */
+.flow .replica .k-del,
+#k-pods .k-del {
+  margin-left: auto;
+  padding: 1px 6px;
+  font-size: 12px;
+  line-height: 1.3;
+  flex: 0 0 auto;
+}
+
 /* En el diagrama de flujo solo se muestran los puntos rojos (servicio caído);
    cuando el servicio está sano el punto verde no se renderiza. */
 .flow .dot.up { display: none; }
@@ -509,5 +519,18 @@ iframe.grafana { width: 100%; height: 720px; border: 1px solid var(--border); bo
 }
 .res-bar-fill.disk {
   background: linear-gradient(90deg, #10b981, #f59e0b);
+}
+
+/* Gráfico SVG del historial de autoescalado (pestaña Kubernetes). */
+.chart-wrap { overflow: hidden; }
+.chart-wrap svg text { font-family: inherit; }
+
+/* Botones de rango del gráfico de autoescalado. */
+#k-chart-range-1h.active,
+#k-chart-range-4h.active,
+#k-chart-range-1d.active {
+  background: var(--fg);
+  color: var(--panel);
+  font-weight: 700;
 }
 

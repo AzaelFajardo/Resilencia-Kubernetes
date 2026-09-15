@@ -250,6 +250,21 @@ function node(key, hub) {
     });
   });
 
+  // ---- Borrar pod (Kubernetes lo recrea: prueba liveness/self-healing) ----
+  view.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.k-del');
+    if (!btn) return;
+    const podName = btn.dataset.pod;
+    if (!(await confirmDialog(`¿Borrar el pod "${podName}" del diagrama?\nEl Deployment lo recreará automáticamente (liveness/self-healing).`))) return;
+    try {
+      await API.kubernetesDeletePod(podName);
+      toast(`Pod ${podName} borrado — el cluster lo está recreando`, 'ok');
+      refresh();
+    } catch (err) {
+      toast('Error borrando pod: ' + err.message, 'err');
+    }
+  });
+
   async function loadRetryConfig() {
     try {
       const rc = await API.getRetries();
@@ -463,6 +478,7 @@ function node(key, hub) {
             <span class="rp-name">${esc(p.name.split('-').slice(0, 2).join('-'))}</span>
             <span class="rp-badge">${podPhaseBadge(p)}</span>
             ${p.restarts ? `<span class="rp-restarts">reinicios: ${p.restarts}</span>` : ''}
+            <button class="btn sm danger k-del" data-svc="${key}" data-pod="${esc(p.name)}" title="Borrar pod (prueba liveness/self-healing)">🗑</button>
           </div>`).join('') || (dep && dep.replicas > 0
             ? '<div class="muted sm">escalando…</div>'
             : '<div class="muted sm">0 réplicas</div>');
