@@ -138,6 +138,23 @@ data:
     CREATE INDEX IF NOT EXISTS idx_notifications_order_id ON notifications (order_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user_id  ON notifications (user_id);
 
+    -- -----------------------------------------------------------------------
+    -- 6. SERVICE LEADER  (distributed lock for the order orchestrator)
+    -- -----------------------------------------------------------------------
+    -- One row per candidate service (order/payment/inventory/user/notification).
+    -- Alive candidates heartbeat their row; the leader = highest priority among
+    -- alive, tie-broken by node id. Leader election runs only inside Kubernetes
+    -- (auto-detected via KUBERNETES_SERVICE_HOST).
+    -- -----------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS service_leader (
+        service_name     VARCHAR(50)  PRIMARY KEY,
+        node_id          UUID         NOT NULL,
+        priority         INTEGER      NOT NULL DEFAULT 0,
+        lease_expires_at TIMESTAMPTZ  NOT NULL,
+        heard_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+
     -- =======================================================================
     -- SEED DATA  –  Rich, realistic data simulating an Amazon-like system.
     -- All 105 fields are populated with complex, nested values.

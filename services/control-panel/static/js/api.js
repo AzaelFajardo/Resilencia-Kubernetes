@@ -102,6 +102,9 @@ export const API = {
   setMode: (mode) => post('/api/resilience/mode', { mode }),
   getRuntimeMode: () => api('/api/runtime-mode'),
   setRuntimeMode: (mode) => post('/api/runtime-mode', { mode }),
+  leader: () => api('/api/orchestrator/leader'),
+  orchestratorChaos: () => api('/api/orchestrator/chaos'),
+  orchestratorChaosSet: (cfg) => post('/api/orchestrator/chaos', cfg),
 };
 
 export { api, post, patch, del };

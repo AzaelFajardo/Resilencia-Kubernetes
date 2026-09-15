@@ -15,8 +15,16 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import delete, desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Base, PaymentRecord, engine, get_db
+from database import Base, PaymentRecord, engine, get_db, AsyncSessionLocal
 from tracing import setup_tracing
+
+from shared.orchestrator import (
+    OrchestratorConfig,
+    build_router,
+    configure,
+    start_leader_loop,
+    stop_leader_loop,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +36,18 @@ ZERO_MONEY = Decimal("0.00")
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    configure(
+        OrchestratorConfig(
+            service_name="payment-service",
+            priority=int(os.getenv("ORCHESTRATOR_PRIORITY", "80")),
+            get_db=get_db,
+            session_factory=AsyncSessionLocal,
+        )
+    )
+    app.include_router(build_router())
+    await start_leader_loop()
     yield
+    await stop_leader_loop()
 
 
 app = FastAPI(title="payment-service", lifespan=lifespan)

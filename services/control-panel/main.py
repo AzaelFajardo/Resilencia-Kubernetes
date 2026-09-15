@@ -189,6 +189,74 @@ def prometheus_base() -> str:
     return PROMETHEUS_URL
 
 
+def _k8s_service_proxy(key: str) -> str:
+    return f"{K8S_API_SERVER}/api/v1/namespaces/{_NAMESPACE}/services/{key}-service:8000/proxy"
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator leader discovery (Fase 4: real failover).
+# The order-orchestration endpoints (/orders, /resilience/*, ...) are served by
+# whichever microservice currently holds the leadership lease. In kubernetes
+# mode the panel asks every service for its /orchestrator/leader status and
+# routes order traffic to the winner. In compose mode election is disabled and
+# order-service is always the orchestrator (classic behaviour, no extra calls).
+# A short cache absorbs failover detection without hammering the API server.
+# ---------------------------------------------------------------------------
+_ORCHESTRATOR_CACHE: dict[str, tuple[str, dict, float]] = {}
+_ORCHESTRATOR_TTL = 5.0
+
+
+def _invalidate_orchestrator_cache() -> None:
+    _ORCHESTRATOR_CACHE.clear()
+
+
+async def _discover_orchestrator() -> tuple[str, dict]:
+    mode = RUNTIME_MODE
+    cached = _ORCHESTRATOR_CACHE.get(mode)
+    if cached and time.time() - cached[2] < _ORCHESTRATOR_TTL:
+        return cached[0], cached[1]
+
+    if mode != "kubernetes" or not K8S_API_SERVER:
+        info = {"service": "order-service", "enabled": False, "is_leader": True, "priority": 100}
+        _ORCHESTRATOR_CACHE[mode] = ("order", info, time.time())
+        return "order", info
+
+    async with _client() as client:
+        async def one(key: str):
+            code, body = await _get(client, f"{_k8s_service_proxy(key)}/orchestrator/leader", timeout=1.2)
+            return key, body if code == 200 else None
+
+        results = dict(await asyncio.gather(*(one(k) for k in SERVICES)))
+
+    alive = {k: v for k, v in results.items() if v}
+    if not alive:
+        raise HTTPException(status_code=503, detail="no orchestrator leader reachable")
+
+    enabled_leaders = [k for k, v in alive.items() if v.get("enabled") and v.get("is_leader")]
+    if enabled_leaders:
+        winner = max(enabled_leaders, key=lambda k: int(alive[k].get("priority", 0)))
+    else:
+        winner = "order" if "order" in alive else max(alive, key=lambda k: int(alive[k].get("priority", 0)))
+
+    _ORCHESTRATOR_CACHE[mode] = (winner, alive.get(winner), time.time())
+    return winner, alive.get(winner)
+
+
+async def orchestrator_base() -> str:
+    """Base URL of the current orchestrator (leader in k8s, order-service in compose)."""
+    key, _ = await _discover_orchestrator()
+    if RUNTIME_MODE == "kubernetes":
+        return _k8s_service_proxy(key)
+    return SERVICES[key]
+
+
+async def _entity_base(svc: str) -> str:
+    """Service base URL for CRUD/entity routes; order features follow the leader."""
+    if svc == "order":
+        return await orchestrator_base()
+    return service_base(svc)
+
+
 def _client(**kwargs):
     """HTTP client for service/Prometheus calls, with cluster certs in K8s mode."""
     if RUNTIME_MODE == "kubernetes":
@@ -306,7 +374,8 @@ async def counts():
     async with _client() as client:
 
         async def one(key: str):
-            code, body = await _get(client, f"{service_base(key)}{endpoints[key]}", timeout=0.5)
+            base = (await orchestrator_base()) if key == "order" else service_base(key)
+            code, body = await _get(client, f"{base}{endpoints[key]}", timeout=0.5)
             return key, body.get("count") if code == 200 else None
 
         results = await asyncio.gather(*(one(key) for key in endpoints))
@@ -419,6 +488,7 @@ async def set_runtime_mode(req: RuntimeModeRequest):
             detail="Kubernetes not configured (set K8S_API_SERVER and mount certs in k8s/certs/)",
         )
     RUNTIME_MODE = mode
+    _invalidate_orchestrator_cache()
     return await get_runtime_mode()
 
 
@@ -719,9 +789,9 @@ async def alerts():
 @app.get("/api/circuit-breaker")
 async def circuit_breaker():
     async with _client() as client:
-        code, body = await _get(client, f"{service_base('order')}/circuit-breaker/payment")
+        code, body = await _get(client, f"{await orchestrator_base()}/circuit-breaker/payment")
         if code != 200:
-            raise HTTPException(status_code=502, detail="order-service unreachable")
+            raise HTTPException(status_code=502, detail="orchestrator leader unreachable")
         return body
 
 
@@ -736,8 +806,17 @@ class ChaosUpdate(BaseModel):
 async def get_chaos(service: str):
     if service not in SERVICES:
         raise HTTPException(status_code=400, detail=f"unknown service: {service}")
+    if service == "order":
+        # Orchestrator chaos follows the leader (order-service is just its
+        # classic home; under failover the payment/inventory/user/notification
+        # leader also owns it).
+        base = await orchestrator_base()
+        path = "/orchestrator/chaos/config"
+    else:
+        base = service_base(service)
+        path = "/chaos/config"
     async with _client() as client:
-        r = await client.get(f"{service_base(service)}/chaos/config", timeout=5.0)
+        r = await client.get(f"{base}{path}", timeout=5.0)
         if r.status_code != 200:
             raise HTTPException(status_code=502, detail=f"{service}-service unreachable")
         return r.json()
@@ -748,8 +827,14 @@ async def set_chaos(update: ChaosUpdate):
     if update.service not in SERVICES:
         raise HTTPException(status_code=400, detail=f"unknown service: {update.service}")
     payload = update.model_dump(exclude={"service"}, exclude_none=True)
+    if update.service == "order":
+        base = await orchestrator_base()
+        path = "/orchestrator/chaos/config"
+    else:
+        base = service_base(update.service)
+        path = "/chaos/config"
     async with _client() as client:
-        r = await client.post(f"{service_base(update.service)}/chaos/config", json=payload, timeout=5.0)
+        r = await client.post(f"{base}{path}", json=payload, timeout=5.0)
         return r.json()
 
 
@@ -764,8 +849,9 @@ async def recent(entity: str, limit: int = 10):
     if entity not in mapping:
         raise HTTPException(status_code=404, detail="unknown entity")
     svc, path = mapping[entity]
+    base = (await orchestrator_base()) if svc == "order" else service_base(svc)
     async with _client() as client:
-        code, body = await _get(client, f"{service_base(svc)}{path}?limit={limit}")
+        code, body = await _get(client, f"{base}{path}?limit={limit}")
         if code != 200:
             raise HTTPException(status_code=502, detail=f"{svc}-service unreachable")
         return body
@@ -826,7 +912,7 @@ async def list_entity(entity: str, offset: int = 0, limit: int = 20, search: str
         path = f"/inventory?{qs}"
     else:  # orders
         path = f"/orders?{qs}"
-    return await _proxy_json("GET", f"{service_base(svc)}{path}")
+    return await _proxy_json("GET", f"{await _entity_base(svc)}{path}")
 
 
 @app.post("/api/entities/{entity}")
@@ -838,7 +924,7 @@ async def create_entity(entity: str, request: Request):
     path = {"users": "/users", "products": "/inventory", "orders": "/orders"}.get(entity)
     if path is None:
         raise HTTPException(status_code=400, detail=f"manual create not supported for {entity}")
-    return await _proxy_json("POST", f"{service_base(svc)}{path}", body=body, timeout=30.0)
+    return await _proxy_json("POST", f"{await _entity_base(svc)}{path}", body=body, timeout=30.0)
 
 
 @app.patch("/api/entities/{entity}/{item_id}")
@@ -847,7 +933,7 @@ async def update_entity(entity: str, item_id: int, request: Request):
     if svc is None:
         raise HTTPException(status_code=404, detail="unknown entity")
     body = await request.json()
-    base = f"{service_base(svc)}"
+    base = await _entity_base(svc)
     if entity == "users":
         # UI sends raw profile fields; user-service expects {"data": {...}}.
         path = f"/users/{item_id}"
@@ -876,7 +962,7 @@ async def delete_entity(entity: str, item_id: int):
     svc = _ENTITY_MAP.get(entity)
     if svc is None:
         raise HTTPException(status_code=404, detail="unknown entity")
-    base = f"{service_base(svc)}"
+    base = await _entity_base(svc)
     path = {
         "users": f"/users/{item_id}",
         "products": f"/inventory/{item_id}",
@@ -892,7 +978,7 @@ async def delete_all_entities(entity: str):
     svc = _ENTITY_MAP.get(entity)
     if svc is None:
         raise HTTPException(status_code=404, detail="unknown entity")
-    base = f"{service_base(svc)}"
+    base = await _entity_base(svc)
     path = {
         "users": "/users",
         "products": "/inventory",
@@ -917,7 +1003,7 @@ async def clear_all_entities():
             "notifications": "/notifications",
         }[entity]
         try:
-            results[entity] = await _proxy_json("DELETE", f"{service_base(svc)}{path}")
+            results[entity] = await _proxy_json("DELETE", f"{await _entity_base(svc)}{path}")
         except Exception as e:
             results[entity] = {"error": str(e)}
     return {"message": "All data cleared successfully", "details": results}
@@ -942,14 +1028,14 @@ class OrderPlacement(BaseModel):
 
 @app.post("/api/orders")
 async def place_order(order: OrderPlacement):
-    target_url, headers = resolve_url(f"{service_base('order')}/orders")
+    target_url, headers = resolve_url(f"{await orchestrator_base()}/orders")
     async with _client() as client:
         try:
             r = await client.post(target_url, headers=headers, json=order.model_dump(), timeout=60.0)
             return r.json()
         except Exception as e:
             err_msg = str(e) or type(e).__name__
-            raise HTTPException(status_code=503, detail=f"order-service unavailable: {err_msg}")
+            raise HTTPException(status_code=503, detail=f"orchestrator leader unavailable: {err_msg}")
 
 
 @app.post("/api/generate/{what}")
@@ -992,7 +1078,7 @@ async def generate_orders(gen: OrderGenerate):
     """Bulk-generate orders through the real flow (optionally for one user)."""
     async with _client() as client:
         r = await client.post(
-            f"{service_base('order')}/orders/generate", json=gen.model_dump(), timeout=600.0
+            f"{await orchestrator_base()}/orders/generate", json=gen.model_dump(), timeout=600.0
         )
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
@@ -1009,9 +1095,9 @@ class SimulateStart(BaseModel):
 @app.get("/api/orders/simulate/status")
 async def simulate_status():
     async with _client() as client:
-        r = await client.get(f"{service_base('order')}/orders/simulate/status", timeout=5.0)
+        r = await client.get(f"{await orchestrator_base()}/orders/simulate/status", timeout=5.0)
         if r.status_code != 200:
-            raise HTTPException(status_code=502, detail="order-service unreachable")
+            raise HTTPException(status_code=502, detail="orchestrator leader unreachable")
         return r.json()
 
 
@@ -1019,7 +1105,7 @@ async def simulate_status():
 async def simulate_start(cfg: SimulateStart):
     async with _client() as client:
         r = await client.post(
-            f"{service_base('order')}/orders/simulate/start", json=cfg.model_dump(), timeout=10.0
+            f"{await orchestrator_base()}/orders/simulate/start", json=cfg.model_dump(), timeout=10.0
         )
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
@@ -1029,7 +1115,7 @@ async def simulate_start(cfg: SimulateStart):
 @app.post("/api/orders/simulate/stop")
 async def simulate_stop():
     async with _client() as client:
-        r = await client.post(f"{service_base('order')}/orders/simulate/stop", timeout=10.0)
+        r = await client.post(f"{await orchestrator_base()}/orders/simulate/stop", timeout=10.0)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()
@@ -1044,9 +1130,9 @@ class RetriesUpdate(BaseModel):
 @app.get("/api/resilience/retries")
 async def get_retries():
     async with _client() as client:
-        r = await client.get(f"{service_base('order')}/resilience/retries", timeout=5.0)
+        r = await client.get(f"{await orchestrator_base()}/resilience/retries", timeout=5.0)
         if r.status_code != 200:
-            raise HTTPException(status_code=502, detail="order-service unreachable")
+            raise HTTPException(status_code=502, detail="orchestrator leader unreachable")
         return r.json()
 
 
@@ -1054,7 +1140,7 @@ async def get_retries():
 async def set_retries(update: RetriesUpdate):
     async with _client() as client:
         r = await client.post(
-            f"{service_base('order')}/resilience/retries",
+            f"{await orchestrator_base()}/resilience/retries",
             json=update.model_dump(exclude_none=True),
             timeout=5.0,
         )
@@ -1070,9 +1156,9 @@ class ModeRequest(BaseModel):
 @app.get("/api/resilience/mode")
 async def get_mode():
     async with _client() as client:
-        r = await client.get(f"{service_base('order')}/resilience/mode", timeout=5.0)
+        r = await client.get(f"{await orchestrator_base()}/resilience/mode", timeout=5.0)
         if r.status_code != 200:
-            raise HTTPException(status_code=502, detail="order-service unreachable")
+            raise HTTPException(status_code=502, detail="orchestrator leader unreachable")
         return r.json()
 
 
@@ -1080,10 +1166,44 @@ async def get_mode():
 async def set_mode(req: ModeRequest):
     async with _client() as client:
         r = await client.post(
-            f"{service_base('order')}/resilience/mode",
+            f"{await orchestrator_base()}/resilience/mode",
             json=req.model_dump(),
             timeout=5.0,
         )
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
+
+
+@app.get("/api/orchestrator/leader")
+async def orchestrator_leader():
+    """Which microservice currently owns the order-orchestration role
+    (leader in kubernetes mode; order-service when election is disabled)."""
+    key, info = await _discover_orchestrator()
+    return {
+        "service": key,
+        "base": await orchestrator_base(),
+        "status": info,
+        "mode": RUNTIME_MODE,
+    }
+
+
+@app.get("/api/orchestrator/chaos")
+async def orchestrator_get_chaos():
+    base = await orchestrator_base()
+    async with _client() as client:
+        r = await client.get(f"{base}/orchestrator/chaos/config", timeout=5.0)
+        if r.status_code != 200:
+            raise HTTPException(status_code=502, detail="orchestrator leader unreachable")
+        return r.json()
+
+
+@app.post("/api/orchestrator/chaos")
+async def orchestrator_set_chaos(update: ChaosUpdate):
+    base = await orchestrator_base()
+    payload = update.model_dump(exclude={"service"}, exclude_none=True)
+    async with _client() as client:
+        r = await client.post(f"{base}/orchestrator/chaos/config", json=payload, timeout=5.0)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code, detail=r.text)
         return r.json()

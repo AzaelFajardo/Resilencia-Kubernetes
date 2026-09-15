@@ -1,16 +1,20 @@
 # Base image used to package the service in a container.
+# Build context: repo root's services/ directory (so the shared orchestrator
+# module is copied alongside the service):
+#   docker build -t notification-service:latest -f services/notification-service/Dockerfile services
 FROM python:3.12-slim
 
 # Defines the working directory inside the container.
 WORKDIR /app
 
 # Copies dependencies first to take advantage of the Docker layer cache.
-COPY requirements.txt .
+COPY notification-service/requirements.txt .
 # Installs the packages required by the notification microservice.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copies the service code into the container.
-COPY . .
+# Copies the service code and the shared orchestrator module into the container.
+COPY notification-service/ ./
+COPY shared/ /app/shared/
 
 # Starts the FastAPI application with Uvicorn.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

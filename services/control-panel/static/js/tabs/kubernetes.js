@@ -17,6 +17,7 @@ export function render(view) {
         </select>
         <button class="btn sm secondary" id="k-delete-pod" title="Borra un pod seleccionado para probar liveness/self-healing">🗑 borrar pod</button>
         <span class="muted" id="k-ns-hint"></span>
+        <span id="k-leader"></span>
       </div>
       <div class="grid">
         ${card('Pods',
@@ -121,6 +122,15 @@ export function render(view) {
 
   async function refresh() {
     const hint = $('k-ns-hint');
+    API.leader().then((l) => {
+      const el = $('k-leader');
+      if (!el) return;
+      el.className = 'badge ok';
+      el.textContent = 'orquestador (líder): ' + (l.service || '—');
+    }).catch(() => {
+      const el = $('k-leader');
+      if (el) { el.className = 'badge warn'; el.textContent = 'orquestador: no responde'; }
+    });
     try {
       const data = await API.kubernetes(ns);
       hint.className = 'muted'; hint.textContent = '';

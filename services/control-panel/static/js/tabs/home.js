@@ -133,10 +133,12 @@ function node(key, hub) {
   // ---- Modo de resiliencia ----
   let runtime = 'compose';
   let strategy = 'baseline';
+  let leader = null;
 
   async function loadModeState() {
     try { strategy = (await API.getMode()).mode || 'baseline'; } catch (_) {}
     try { runtime = (await API.getRuntimeMode()).mode || 'compose'; } catch (_) {}
+    try { leader = await API.leader(); } catch (_) { leader = null; }
     renderModeState();
   }
 
@@ -150,7 +152,10 @@ function node(key, hub) {
     const stateEl = $('mode-state');
     if (stateEl) {
       const env = runtime === 'kubernetes' ? 'Kubernetes' : 'Compose';
-      stateEl.innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>`;
+      const leaderTxt = runtime === 'kubernetes'
+        ? ` · Orquestador: <b>${leader && leader.service ? leader.service : '—'}</b>`
+        : '';
+      stateEl.innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>${leaderTxt}`;
     }
     // Kubernetes shows live replica controls + pod cards under each node.
     const isK8s = runtime === 'kubernetes';

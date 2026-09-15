@@ -19,8 +19,16 @@ import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import desc, func, or_, text, delete
-from database import engine, Base, get_db, User, Order
+from database import engine, Base, get_db, User, Order, AsyncSessionLocal
 import faker_utils
+
+from shared.orchestrator import (
+    OrchestratorConfig,
+    build_router,
+    configure,
+    start_leader_loop,
+    stop_leader_loop,
+)
 
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -29,7 +37,18 @@ from prometheus_fastapi_instrumentator import Instrumentator
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    configure(
+        OrchestratorConfig(
+            service_name="user-service",
+            priority=int(os.getenv("ORCHESTRATOR_PRIORITY", "40")),
+            get_db=get_db,
+            session_factory=AsyncSessionLocal,
+        )
+    )
+    app.include_router(build_router())
+    await start_leader_loop()
     yield
+    await stop_leader_loop()
 
 # ── FastAPI application ────────────────────────────────────────────────
 app = FastAPI(title="user-service", lifespan=lifespan)

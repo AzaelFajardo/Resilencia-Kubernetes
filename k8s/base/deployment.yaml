@@ -65,6 +65,10 @@ spec:
               value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
+            - name: SERVICE_NAME
+              value: "user-service"
+            - name: ORCHESTRATOR_PRIORITY
+              value: "40"
             - name: FAILURE_RATE
               value: "0.0"
             - name: LATENCY_MS
@@ -115,6 +119,10 @@ spec:
               value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
+            - name: SERVICE_NAME
+              value: "inventory-service"
+            - name: ORCHESTRATOR_PRIORITY
+              value: "60"
             - name: FAILURE_RATE
               value: "0.0"
             - name: LATENCY_MS
@@ -174,6 +182,14 @@ spec:
               value: "0.0"
             - name: LATENCY_MS
               value: "0"
+            - name: SERVICE_NAME
+              value: "payment-service"
+            - name: ORCHESTRATOR_PRIORITY
+              value: "80"
+            - name: FAILURE_RATE
+              value: "0.0"
+            - name: LATENCY_MS
+              value: "0"
             - name: TIMEOUT_RATE
               value: "0.0"
           ports:
@@ -222,6 +238,10 @@ spec:
               value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
+            - name: SERVICE_NAME
+              value: "notification-service"
+            - name: ORCHESTRATOR_PRIORITY
+              value: "20"
             - name: FAILURE_RATE
               value: "0.0"
             - name: LATENCY_MS
@@ -277,6 +297,10 @@ spec:
               value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://otel-collector:4317"
+            - name: SERVICE_NAME
+              value: "order-service"
+            - name: ORCHESTRATOR_PRIORITY
+              value: "100"
             - name: USER_SERVICE_URL
               value: "http://user-service:8000"
             - name: INVENTORY_SERVICE_URL
