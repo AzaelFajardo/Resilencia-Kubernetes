@@ -93,6 +93,7 @@ export function render(view) {
 
 function node(key, hub) {
     return `<div class="node ${hub ? 'hub' : ''}" id="f-${key}">
+      <span class="deck-badge" id="f-${key}-deck" hidden></span>
       <div class="hop"><span>${LABELS[key]}</span><span class="dot" id="f-${key}-dot"></span></div>
       <div class="ortag" id="f-${key}-ortag"></div>
       <div class="lat" id="f-${key}-lat"></div>
@@ -168,6 +169,12 @@ function node(key, hub) {
       if (ctl) ctl.hidden = !isK8s;
       const list = $('f-' + key + '-list');
       if (list) list.hidden = !isK8s;
+      if (!isK8s) {
+        const nodeEl = $('f-' + key);
+        if (nodeEl) { nodeEl.classList.remove('has-deck', 'k8s-clickable'); nodeEl.title = ''; }
+        const deckEl = $('f-' + key + '-deck');
+        if (deckEl) deckEl.hidden = true;
+      }
     });
     renderCbBadge();
     renderOrchestrator();
@@ -294,20 +301,84 @@ function node(key, hub) {
     });
   });
 
-  // ---- Borrar pod (Kubernetes lo recrea: prueba liveness/self-healing) ----
-  view.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.k-del');
-    if (!btn) return;
-    const podName = btn.dataset.pod;
-    if (!(await confirmDialog(`¿Borrar el pod "${podName}" del diagrama?\nEl Deployment lo recreará automáticamente (liveness/self-healing).`))) return;
-    try {
-      await API.kubernetesDeletePod(podName);
-      toast(`Pod ${podName} borrado — el cluster lo está recreando`, 'ok');
-      refresh();
-    } catch (err) {
-      toast('Error borrando pod: ' + err.message, 'err');
-    }
+  // ---- Clic en un servicio (solo Kubernetes) abre el popup de réplicas ----
+  // Ignora clics en controles interactivos (botones, inputs) y en el nodo
+  // "Cliente", que no es un servicio.
+  view.addEventListener('click', (e) => {
+    if (runtime !== 'kubernetes') return;
+    if (e.target.closest('button, input, a, select')) return;
+    const node = e.target.closest('.node');
+    if (!node || !node.id || node.id.indexOf('f-') !== 0) return;
+    const key = node.id.slice(2);
+    if (!SVC_KEYS.includes(key)) return;
+    openServiceModal(key);
   });
+
+  function fmtAge(iso) {
+    if (!iso) return '—';
+    const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ' + (s % 60) + 's';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ' + (m % 60) + 'm';
+    return Math.floor(h / 24) + 'd ' + (h % 24) + 'h';
+  }
+
+  // Popup de administración de réplicas de un servicio (Kubernetes): lista
+  // cada pod por individual con su estado, IP, reinicios y antigüedad, y
+  // permite borrarlo (el Deployment lo recrea: prueba liveness/self-healing).
+  function openServiceModal(key) {
+    const depName = LABELS[key];
+    const pods = (k8s.pods || []).filter((p) => p.app === depName);
+    const dep = k8s.deployments.find((d) => d.name === depName);
+    document.getElementById('pod-modal-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'pod-modal-overlay';
+    overlay.className = 'confirm-overlay';
+    const rows = pods.map((p) => {
+      const cls = p.ready ? 'ok' : p.phase === 'Pending' ? 'pending' : 'err';
+      return `<div class="pod-row ${cls}">
+        <span class="rp-dot ${p.ready ? 'up' : p.phase === 'Pending' ? 'warn' : 'down'}"></span>
+        <div class="pod-row-main">
+          <div class="pod-row-name" title="${esc(p.name)}">${esc(p.name)}</div>
+          <div class="pod-row-meta">${podPhaseBadge(p)} · IP ${esc(p.podIP || '—')} · reinicios ${p.restarts ?? 0} · ${fmtAge(p.startedAt)}</div>
+        </div>
+        <button class="btn sm danger pod-del" data-pod="${esc(p.name)}" title="Borrar pod (liveness/self-healing)">🗑</button>
+      </div>`;
+    }).join('') || '<div class="muted sm">sin pods</div>';
+    overlay.innerHTML = `
+      <div class="confirm-box pod-modal">
+        <div class="pod-modal-title">
+          <h3>${esc(depName)}</h3>
+          <span class="muted">${dep ? dep.readyReplicas + '/' + dep.replicas + ' listos · ' : ''}${pods.length} pod(s)</span>
+        </div>
+        <div class="pod-rows">${rows}</div>
+        <div class="row" style="justify-content:flex-end;margin:0">
+          <button class="btn secondary" id="pod-modal-close">Cerrar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('#pod-modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+    overlay.querySelectorAll('.pod-del').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const podName = btn.dataset.pod;
+        if (!(await confirmDialog(`¿Borrar el pod "${podName}"?\nEl Deployment lo recreará automáticamente (liveness/self-healing).`))) return;
+        btn.disabled = true;
+        try {
+          await API.kubernetesDeletePod(podName);
+          toast(`Pod ${podName} borrado — el cluster lo está recreando`, 'ok');
+          await refresh();
+          openServiceModal(key);
+        } catch (err) {
+          toast('Error borrando pod: ' + err.message, 'err');
+          btn.disabled = false;
+        }
+      });
+    });
+  }
 
   async function loadRetryConfig() {
     try {
@@ -515,19 +586,26 @@ function node(key, hub) {
       const countEl = $('f-' + key + '-replicas');
       const readyEl = $('f-' + key + '-ready');
       const listEl = $('f-' + key + '-list');
+      const deckEl = $('f-' + key + '-deck');
+      const nodeEl = $('f-' + key);
+      const total = dep ? dep.replicas : pods.length;
+      // 1 pod: el nodo ya lo representa (nada debajo). ≥2 pods: las tarjetas
+      // se apilan tras el nodo y la gestión individual pasa al popup.
+      const stacked = total >= 2;
       if (countEl) countEl.textContent = dep ? dep.replicas : '?';
       if (readyEl) readyEl.textContent = dep ? `listos ${dep.readyReplicas}/${dep.replicas}` : '';
+      if (nodeEl) {
+        nodeEl.classList.toggle('has-deck', stacked);
+        nodeEl.classList.add('k8s-clickable');
+        nodeEl.title = stacked ? total + ' réplicas — clic para administrar' : '';
+      }
+      if (deckEl) {
+        deckEl.hidden = !stacked;
+        deckEl.textContent = stacked ? '×' + total : '';
+      }
       if (listEl) {
-        listEl.innerHTML = pods.map((p) => `
-          <div class="replica ${p.ready ? 'ok' : p.phase === 'Pending' ? 'pending' : 'err'}" title="${esc(p.name)}${p.podIP ? ' · ' + esc(p.podIP) : ''}">
-            <span class="rp-dot ${p.ready ? 'up' : p.phase === 'Pending' ? 'warn' : 'down'}"></span>
-            <span class="rp-name">${esc(p.name.split('-').slice(0, 2).join('-'))}</span>
-            <span class="rp-badge">${podPhaseBadge(p)}</span>
-            ${p.restarts ? `<span class="rp-restarts">reinicios: ${p.restarts}</span>` : ''}
-            <button class="btn sm danger k-del" data-svc="${key}" data-pod="${esc(p.name)}" title="Borrar pod (prueba liveness/self-healing)">🗑</button>
-          </div>`).join('') || (dep && dep.replicas > 0
-            ? '<div class="muted sm">escalando…</div>'
-            : '<div class="muted sm">0 réplicas</div>');
+        listEl.hidden = stacked || total === 1;
+        listEl.innerHTML = total === 0 ? '<div class="muted sm">0 réplicas</div>' : '';
       }
     });
   }

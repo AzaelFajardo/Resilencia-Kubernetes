@@ -291,6 +291,7 @@ input[type="number"] { width: 88px; }
 .flow { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .flow .arrow-down { color: var(--muted-2); font-size: 16px; line-height: 1; }
 .flow .node {
+  position: relative;
   padding: 11px 16px; border: 1px solid var(--border-2); border-radius: 14px;
   background: var(--panel-2); font-size: 13px; font-weight: 600; min-width: 170px;
   transition: opacity .25s, border-color .25s, background .25s;
@@ -327,24 +328,30 @@ input[type="number"] { width: 88px; }
 .flow .deploy-ctl .dc-ready { font-size: 11px; color: var(--muted); font-weight: 600; margin-left: 4px; }
 .flow .deploy-ctl .btn { width: 26px; padding: 2px 0; font-size: 14px; line-height: 1.2; }
 .flow .replicas { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
-.flow .replica {
-  display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--border-2); border-radius: 10px;
-  background: var(--panel); padding: 4px 8px; font-size: 11px;
-}
-.flow .replica.ok { border-color: var(--green); }
-.flow .replica.pending { border-color: var(--yellow); }
-.flow .replica.err { border-color: var(--red); }
-.flow .replica .rp-name { font-weight: 700; color: var(--fg); }
-.flow .replica .rp-badge { margin-left: auto; }
-.flow .replica .rp-restarts { color: var(--muted); font-weight: 600; }
-.flow .replica .rp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-.flow .replica .rp-dot.up { background: var(--green); }
-.flow .replica .rp-dot.warn { background: var(--yellow); }
-.flow .replica .rp-dot.down { background: var(--red); }
 
-/* Botón para borrar un pod desde el diagrama y desde la pestaña Kubernetes. */
-.flow .replica .k-del,
+/* ≥2 réplicas: las tarjetas se apilan DETRÁS del nodo (efecto de baraja) y la
+   gestión individual pasa al popup que abre al hacer clic en el servicio. */
+.flow .node.k8s-clickable { cursor: pointer; }
+.flow .node.k8s-clickable:hover { border-color: var(--accent); }
+.flow .node.has-deck {
+  z-index: 1;
+  box-shadow:
+    5px 5px 0 -1px var(--panel), 5px 5px 0 0 var(--border-2),
+    10px 10px 0 -1px var(--panel), 10px 10px 0 0 var(--border-2);
+}
+.flow .node.has-deck:hover {
+  box-shadow:
+    5px 5px 0 -1px var(--panel), 5px 5px 0 0 var(--accent),
+    10px 10px 0 -1px var(--panel), 10px 10px 0 0 var(--accent);
+}
+.flow .deck-badge {
+  position: absolute; top: -9px; right: -9px; z-index: 3;
+  min-width: 22px; text-align: center;
+  background: var(--accent); color: #fff; border-radius: 999px;
+  padding: 1px 7px; font-size: 11px; font-weight: 800;
+}
+
+/* Botón para borrar un pod desde la pestaña Kubernetes. */
 #k-pods .k-del {
   margin-left: auto;
   padding: 1px 6px;
@@ -455,6 +462,30 @@ iframe.grafana { width: 100%; height: 720px; border: 1px solid var(--border); bo
   box-shadow: var(--card-shadow);
 }
 .confirm-box p { margin: 0 0 18px; font-size: 14px; line-height: 1.5; }
+
+/* ---------- Popup de réplicas de un servicio (diagrama de flujo) ---------- */
+.pod-modal { max-width: 560px; }
+.pod-modal-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.pod-modal-title h3 { margin: 0; font-size: 15px; font-weight: 800; }
+.pod-modal-title .muted { font-size: 12px; }
+.pod-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; max-height: 52vh; overflow-y: auto; }
+.pod-row {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border-2); border-radius: 10px;
+  background: var(--panel-2); padding: 7px 10px;
+}
+.pod-row.ok { border-color: var(--green); }
+.pod-row.pending { border-color: var(--yellow); }
+.pod-row.err { border-color: var(--red); }
+.pod-row .rp-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.pod-row .rp-dot.up { background: var(--green); }
+.pod-row .rp-dot.warn { background: var(--yellow); }
+.pod-row .rp-dot.down { background: var(--red); }
+.pod-row-main { min-width: 0; flex: 1 1 auto; }
+.pod-row-name { font-weight: 700; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod-row-meta { font-size: 11px; color: var(--muted); font-weight: 600; margin-top: 2px; }
+.pod-row .badge { flex: 0 0 auto; }
+.pod-row .pod-del { flex: 0 0 auto; }
 
 @media (max-width: 720px) {
   .topbar { flex-wrap: wrap; }

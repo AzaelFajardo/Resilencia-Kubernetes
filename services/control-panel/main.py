@@ -708,6 +708,7 @@ async def kubernetes_status(namespace: str = "default"):
                 statuses = item.get("status", {}).get("containerStatuses", [{}])
                 cs = statuses[0] if statuses else {}
                 labels = item.get("metadata", {}).get("labels", {})
+                running = (cs.get("state") or {}).get("running") or {}
                 pods.append({
                     "name": item["metadata"]["name"],
                     "app": labels.get("app"),
@@ -715,6 +716,8 @@ async def kubernetes_status(namespace: str = "default"):
                     "ready": cs.get("ready", False),
                     "restarts": cs.get("restartCount", 0),
                     "podIP": item.get("status", {}).get("podIP"),
+                    "hostIP": item.get("status", {}).get("hostIP"),
+                    "startedAt": running.get("startedAt"),
                 })
 
         return {
