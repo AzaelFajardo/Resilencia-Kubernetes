@@ -3,41 +3,7 @@
 # internet. These are development defaults so anyone can clone and run it.
 # If you ever DO deploy this, move these credentials to a Kubernetes Secret
 # or an external secret manager before exposing anything.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: postgres
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: postgres
-  template:
-    metadata:
-      labels:
-        app: postgres
-    spec:
-      containers:
-        - name: postgres
-          image: postgres:16-alpine
-          env:
-            - name: POSTGRES_USER
-              value: "resilencia"
-            - name: POSTGRES_PASSWORD
-              value: "resilencia_secret"
-            - name: POSTGRES_DB
-              value: "resilencia_db"
-          ports:
-            - containerPort: 5432
-          volumeMounts:
-            - name: postgres-init
-              mountPath: /docker-entrypoint-initdb.d/init.sql
-              subPath: init.sql
-      volumes:
-        - name: postgres-init
-          configMap:
-            name: postgres-init
----
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:

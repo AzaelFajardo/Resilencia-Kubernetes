@@ -384,6 +384,51 @@ the transition.
   deployment (re-apply HPA, scale to 1) → leadership returns to `order-service`
   automatically (priority 100 > 80).
 
+### PostgreSQL replication (Fase 6: primary + hot-standby)
+
+`k8s/base/postgres*.yaml` run a classic streaming-replication setup with no
+operator:
+
+- `postgres.yaml` — primary, PGDATA on `postgres-primary-pvc`; `args` override
+  CMD (not ENTRYPOINT) so `docker-entrypoint.sh` still runs `initdb` +
+  `init.sql` on first boot; flags make the PG16 defaults explicit
+  (`wal_level=replica`, 5 senders/slots) and pin `hba_file`.
+- `postgres-hba.yaml` — auth in one place: app lines + `host replication
+  replicator` for `pg_basebackup`/WAL streaming.
+- `postgres-replica.yaml` — an initContainer runs `pg_basebackup -R` (writes
+  `standby.signal` + `primary_conninfo`) when `PGDATA` is empty, then the pod
+  starts as hot standby on `postgres-replica-pvc`.
+- `init.sql` (db-configmap) creates the `replicator` LOGIN REPLICATION role.
+
+Importantly the 5 microservices never change: `DATABASE_URL` still points at
+`postgres:5432`, and the `postgres` **Service** is the switch that moves app
+traffic in a failover.
+
+**Status/parity:** `scripts/postgres_replication_status.sh` prints
+`pg_is_in_recovery()` (expect `f` on primary, `t` on standby) and the order
+count on both, plus the WAL sender (`state=streaming`).
+
+**Failover (killed-primary demo, verified):**
+```bash
+kubectl scale deployment postgres --replicas=0   # primary gone, stays gone
+kubectl exec deploy/postgres-replica -- sh -c \
+  'export PGPASSWORD=resilencia_secret; psql -U resilencia -d resilencia_db \
+   -h localhost -Atc "SELECT count(*) FROM orders"'   # data survived
+./scripts/promote_postgres.sh                        # pg_promote + repoint Service
+```
+`promote_postgres.sh` runs `SELECT pg_promote(true)` on the standby, removes
+`standby.signal` (so the pod stays primary across restarts) and patches the
+`postgres` Service selector to `app: postgres-replica`. After it, `POST
+/api/orders` and `/api/counts` keep working through the promoted node (verified).
+
+**Failback / rebuilding a standby:** the old primary is a burned node after a
+failover (its PVC has no `standby.signal`, so restarting it would create a
+split brain). To restore redundancy, retarget the base backup at the new
+primary instead: scale the old Deployment out, wipe its PVC, and re-run the
+replica recipe — i.e. clone a new standby *against* the promoted primary
+(`pg_basebackup -h <promoted-primary-ip> ...`), then point `postgres-replica`
+at it with `-R`.
+
 ## Process notes (things that would otherwise be re-discovered the hard way)
 
 - **Seed stock is small on purpose** (`db/init.sql` gives product 1 only

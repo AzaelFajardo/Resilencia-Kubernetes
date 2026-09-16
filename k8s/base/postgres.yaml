@@ -1,0 +1,81 @@
+# DEV-ONLY credentials: local study simulation (see deployment.yaml header).
+# PostgreSQL PRIMARY with streaming replication enabled. The old postgres
+# Deployment lived in deployment.yaml with no PVC (ephemeral data); this one
+# persists PGDATA on a PVC and ships the WAL so `postgres-replica` can stream.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-primary-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: "resilencia"
+            - name: POSTGRES_PASSWORD
+              value: "resilencia_secret"
+            - name: POSTGRES_DB
+              value: "resilencia_db"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # `args` (not `command`): keeps docker-entrypoint.sh so the first
+          # boot still runs initdb + init.sql before exec'ing postgres.
+          # PG16 already defaults to wal_level=replica; the flags make the
+          # intent explicit and point hba_file at the shared ConfigMap.
+          args:
+            - postgres
+            - -c
+            - wal_level=replica
+            - -c
+            - max_wal_senders=5
+            - -c
+            - max_replication_slots=5
+            - -c
+            - hba_file=/etc/postgresql/pg_hba.conf
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "resilencia", "-d", "resilencia_db"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-init
+              mountPath: /docker-entrypoint-initdb.d/init.sql
+              subPath: init.sql
+            - name: pg-hba
+              mountPath: /etc/postgresql/pg_hba.conf
+              subPath: pg_hba.conf
+              readOnly: true
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: postgres-primary-pvc
+        - name: postgres-init
+          configMap:
+            name: postgres-init
+        - name: pg-hba
+          configMap:
+            name: postgres-hba

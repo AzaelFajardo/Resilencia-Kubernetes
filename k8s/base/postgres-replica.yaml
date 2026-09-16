@@ -1,0 +1,93 @@
+# DEV-ONLY local cluster. PostgreSQL HOT STANDBY replica: boots from a
+# pg_basebackup of the primary (see scripts/promote_postgres.sh to make it
+# primary and re-point the `postgres` Service at it).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-replica-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-replica
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-replica
+  template:
+    metadata:
+      labels:
+        app: postgres-replica
+    spec:
+      initContainers:
+        - name: base-backup
+          image: postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              value: "replicator_secret"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          command:
+            - sh
+            - -c
+            - >
+              if [ ! -s "$PGDATA/PG_VERSION" ]; then
+                rm -rf "$PGDATA"
+                pg_basebackup -h postgres -U replicator -D "$PGDATA" -R -P --checkpoint=fast
+              fi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # -R in the init container writes standby.signal + primary_conninfo,
+          # so this pod ARRIVES as a hot standby and only starts serving reads.
+          args:
+            - postgres
+            - -c
+            - hot_standby=on
+            - -c
+            - hba_file=/etc/postgresql/pg_hba.conf
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "resilencia", "-d", "resilencia_db"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: pg-hba
+              mountPath: /etc/postgresql/pg_hba.conf
+              subPath: pg_hba.conf
+              readOnly: true
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: postgres-replica-pvc
+        - name: pg-hba
+          configMap:
+            name: postgres-hba
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-replica
+spec:
+  selector:
+    app: postgres-replica
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432

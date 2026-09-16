@@ -243,6 +243,13 @@ data:
 
     SELECT setval('notifications_id_seq', (SELECT MAX(id) FROM notifications));
 
+    -- -----------------------------------------------------------------------
+    -- Replication role (streaming replication, k8s/base/postgres-replica.yaml)
+    -- -----------------------------------------------------------------------
+    -- Used by pg_basebackup / WAL streaming from the hot-standby replica.
+    -- Authentication is enforced by the postgres-hba ConfigMap (host replication).
+    CREATE ROLE replicator LOGIN REPLICATION PASSWORD 'replicator_secret';
+
     -- =======================================================================
     -- Done.  The database is ready with all 105 fields populated.
     -- =======================================================================

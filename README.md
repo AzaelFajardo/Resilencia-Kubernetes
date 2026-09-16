@@ -412,6 +412,33 @@ Escenarios verificados contra el panel (`http://localhost:8105`, modo
 3. **Carga + HPA** — `POST /api/orders/simulate/start {"rate":40,"clients":10}` → `order-service-hpa` escala 1→3 (70% CPU). Resultado observado: 625 órdenes enviadas, 605 éxito. Parar con `/api/orders/simulate/stop`.
 4. **Takeover del líder** — escalar `order-service` a 0 (con su HPA temporalmente eliminado; el autoscaler no permite min 0): liderazgo pasa a `payment-service` en ~1 lease y `/api/orders` + `/api/counts` siguen funcionando vía el nuevo líder. Al restaurar (`kubectl apply -f k8s/resilience/hpa.yaml` + scale a 1), el liderazgo regresa solo a `order-service`.
 
+### Replicación de datos PostgreSQL (Fase 6)
+
+La base de datos corre como **primario + réplica hot standby** (streaming
+replication nativa, imagen `postgres:16-alpine`, sin operador):
+
+- `k8s/base/postgres.yaml` — primario con PVC (`postgres-primary-pvc`), WAL
+  disponible (`wal_level=replica`, 5 senders), `hba_file` propio.
+- `k8s/base/postgres-replica.yaml` — réplica que arranca con `pg_basebackup`
+  del primario (`-R` → `standby.signal` + `primary_conninfo`) sobre su PVC.
+- `k8s/base/postgres-hba.yaml` — reglas de auth (app + `host replication
+  replicator`). El rol `replicator` se crea en `init.sql`.
+- Los 5 microservicios no cambian: siguen apuntando a `DATABASE_URL` =
+  `postgres:5432` (el Service hace de conmutador).
+
+**Failover (script):** `scripts/promote_postgres.sh` — `pg_promote()` en la
+réplica + re-apunta el Service a `app: postgres-replica`. Verificado en vivo:
+datos paridad primario/réplica (órdenes se propagan), matar el primario no
+pierde datos y la app sigue escribiendo en el nodo promovido. Health/paridad:
+`scripts/postgres_replication_status.sh`.
+
+Caveats (aceptados en lab de estudio): minikube es single-node → la
+replicación es **lógica** (los datos existen dos veces en el mismo nodo físico,
+no es una copia geográfica); no hay read/write splitting (todo sigue al
+primario); tras un failover el primario original queda desconectado (su
+Deployment queda a 0) — para recuperar redundancia, re-clonar un standby
+siguiendo al nuevo primario (recipe en `docs/TOOLING.md`).
+
 ## Configuracion de la base de datos
 
 Todos los microservicios y el seeder leen la variable `DATABASE_URL`. Por defecto apuntan al contenedor `postgres` de Compose:
