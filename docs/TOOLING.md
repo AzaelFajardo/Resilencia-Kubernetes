@@ -306,6 +306,39 @@ in each service):
 The smaller truth of living with a minikube cluster while the shared
 orchestrator module (Fase 4) and the control-panel evolve:
 
+### Arranque y parada asistidos
+
+Dos helpers en `scripts/` dejan el entorno listo de forma reproducible y
+ordenada. Se invocan tambien desde la raiz como `./run.sh k8s` y
+`./run.sh stop` (solo macOS/Linux; requieren Docker, y para Kubernetes tambien
+`minikube` y `kubectl` en el `PATH`).
+
+`./scripts/up.sh` (`./run.sh k8s`) hace, en orden:
+
+1. Asegura `minikube` (driver docker). Si la VM estaba apagada, detiene antes
+   `control-panel` para liberar `192.168.49.2` (evita `Address already in use`)
+   y habilita el addon `metrics-server` (necesario para el HPA).
+2. Construye las imagenes de los 5 microservicios + `data-seeder` y las carga
+   al cluster (`minikube image load`, con `rmi` previo para no cachear capas).
+3. Comprueba `k8s/certs/` y aplica `k8s/base/` + `k8s/resilience/hpa.yaml`.
+4. Espera los rollouts de todos los deployments y el `job/data-seeder`.
+5. Levanta el stack Docker Compose (control-panel + observabilidad).
+6. Reactiva el modo Kubernetes del control-panel (el toggle vive en memoria y
+   se resetea en cada arranque del contenedor).
+
+Opciones: `--compose-only`, `--k8s-only`, `--no-build`, `--reset` (borra
+volumenes Compose y manifiestos antes de arrancar).
+
+`./scripts/down.sh` (`./run.sh stop`) detiene todo sin forzar nada:
+
+1. `docker compose stop -t 30` (SIGTERM con 30s de gracia; no borra los
+   contenedores, se reanudan con `up.sh`).
+2. `minikube stop` (apagado ordenado de la VM; pods y PVCs persisten).
+
+No borra datos por defecto. Opciones: `--compose-only`, `--k8s-only`,
+`--keep-cluster` (detiene solo Compose) y `--purge` (ademas elimina volumenes
+Compose y manifiestos del cluster).
+
 ### Rebuild + redeploy a service image (after editing `shared/` or a service)
 
 The microservice images bake in `services/shared/orchestrator.py`, so a code

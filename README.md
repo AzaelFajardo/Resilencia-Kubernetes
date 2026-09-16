@@ -43,7 +43,19 @@ Hay un helper multiplataforma en la raiz del repo:
 - **Windows (PowerShell):** `.\run.ps1 up`
 - **macOS / Linux:** `./run.sh up`
 
-Comandos disponibles: `up`, `build`, `down`, `reset`, `logs`, `ps`, `status` y `help`.
+Comandos disponibles: `up`, `k8s`, `stop`, `build`, `down`, `reset`, `logs`, `ps`, `status` y `help`.
+
+Para levantar el proyecto completo (incluyendo Kubernetes) y detenerlo de forma
+ordenada, los helpers delegan en `scripts/`:
+
+```bash
+./run.sh k8s     # minikube + imagenes + manifiestos + Compose + modo kubernetes
+./run.sh stop    # parada suave (SIGTERM) de Compose y minikube, sin borrar datos
+```
+
+Ambos scripts aceptan opciones (ver `--help`): `--compose-only`, `--k8s-only`,
+`--no-build`, `--reset` para `up`, y `--keep-cluster`, `--purge` para `down`.
+Detalle en [`docs/TOOLING.md`](docs/TOOLING.md#arranque-y-parada-asistidos).
 
 Equivalente directo con Docker Compose:
 
@@ -376,7 +388,10 @@ Para caos:
 
 El stack tambien corre en un cluster de Kubernetes (probado con minikube,
 driver Docker). Requiere `kubectl` (incluido con Docker Desktop en Windows) y
-`minikube` (`winget install -e --id Kubernetes.minikube`):
+`minikube` (`winget install -e --id Kubernetes.minikube`).
+
+La forma rapida (macOS/Linux) es `./run.sh k8s`, que automatiza todo lo de
+abajo. Los pasos manuales equivalentes son:
 
 ```powershell
 minikube start --driver=docker

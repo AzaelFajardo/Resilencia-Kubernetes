@@ -20,6 +20,8 @@ Uso: ./run.sh [comando]
 
 Comandos:
   up      Construye e inicia todo el stack en segundo plano (por defecto)
+  k8s     Levanta todo contemplando Kubernetes (minikube + manifiestos + Compose)
+  stop    Detiene todo de forma ordenada y sin forzar (Compose + minikube)
   build   Reconstruye las imagenes sin cache
   down    Detiene el stack y elimina los contenedores
   reset   Detiene, borra volumenes y vuelve a iniciar desde cero
@@ -28,6 +30,10 @@ Comandos:
   status  Muestra el estado y recuerda las URLs principales
   help    Muestra esta ayuda
 
+Atajos de Kubernetes (delegan en scripts/):
+  ./run.sh k8s     -> scripts/up.sh    (opciones: --compose-only, --k8s-only, --no-build, --reset)
+  ./run.sh stop    -> scripts/down.sh  (opciones: --compose-only, --k8s-only, --keep-cluster, --purge)
+
 Configuracion: copia .env.example a .env para ajustar seed, chaos y DB.
 EOF
 }
@@ -35,6 +41,14 @@ EOF
 case "$COMMAND" in
   help)
     show_help
+    ;;
+  k8s)
+    shift
+    exec "$(dirname "$0")/scripts/up.sh" "$@"
+    ;;
+  stop)
+    shift
+    exec "$(dirname "$0")/scripts/down.sh" "$@"
     ;;
   up)
     docker compose up --build -d --remove-orphans
