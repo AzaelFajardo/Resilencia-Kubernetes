@@ -40,6 +40,11 @@ spec:
               if [ ! -s "$PGDATA/PG_VERSION" ]; then
                 rm -rf "$PGDATA"
                 pg_basebackup -h postgres -U replicator -D "$PGDATA" -R -P --checkpoint=fast
+                # -R should write standby.signal, but be explicit so the pod
+                # always boots as a hot standby even if that flag is skipped
+                # (observed on some postgres images / pg_basebackup builds).
+                touch "$PGDATA/standby.signal"
+                echo "standby.signal created: $PGDATA/standby.signal"
               fi
           volumeMounts:
             - name: pgdata
