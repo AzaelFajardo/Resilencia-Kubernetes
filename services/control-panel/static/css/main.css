@@ -357,6 +357,27 @@ input[type="number"] { width: 88px; }
    cuando el servicio está sano el punto verde no se renderiza. */
 .flow .dot.up { display: none; }
 
+.flow .ortag { margin-top: 6px; font-weight: 800; font-size: 11px; min-height: 18px; }
+
+/* Orquestador actual en el diagrama: nodo resaltado (fallback) u order-service
+   relevado cuando otro servicio tomó el rol. */
+.flow .node.acting-orch { border-color: var(--yellow); background: var(--warn-bg); box-shadow: 0 0 0 3px var(--warn-bg); }
+.flow .node.acting-orch .hop { color: var(--warn-fg); }
+.flow .node.relegated { opacity: .5; border-style: dashed; }
+
+/* Resumen de estrategia/entorno/orquestador dentro de la tarjeta del flujo. */
+.mode-state { margin-top: 10px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.mode-state b { color: var(--text); }
+
+/* Aviso de fallback: cuando order-service está caído y otro servicio orquesta. */
+.orb-banner {
+  margin-top: 8px; padding: 8px 12px;
+  border: 1px dashed var(--yellow); border-radius: 12px;
+  background: var(--warn-bg); color: var(--warn-fg);
+  font-size: 12.5px; font-weight: 600;
+}
+.orb-banner[hidden] { display: none; }
+
 /* ---- Circuit breaker badge (esquina superior derecha del card del flujo) ---- */
 .flow .cb-row {
   display: flex;

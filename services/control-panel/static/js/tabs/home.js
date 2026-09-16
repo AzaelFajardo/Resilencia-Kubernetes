@@ -39,6 +39,8 @@ export function render(view) {
         <span id="f-msg" class="muted"></span>
         <button class="btn danger sm" id="home-clear-all-counts" style="margin-left:auto">Limpiar Todo</button>
       </div>
+      <div id="mode-state" class="mode-state"></div>
+      <div class="orb-banner" id="f-orb-banner" hidden></div>
       <div class="cb-row" id="home-cb-row" hidden>
         <div id="home-cb" class="cb-badge"></div>
       </div>
@@ -92,6 +94,7 @@ export function render(view) {
 function node(key, hub) {
     return `<div class="node ${hub ? 'hub' : ''}" id="f-${key}">
       <div class="hop"><span>${LABELS[key]}</span><span class="dot" id="f-${key}-dot"></span></div>
+      <div class="ortag" id="f-${key}-ortag"></div>
       <div class="lat" id="f-${key}-lat"></div>
       <div class="count" id="f-${key}-count"></div>
       <div class="deploy-ctl" id="f-${key}-ctl" hidden>
@@ -152,10 +155,11 @@ function node(key, hub) {
     const stateEl = $('mode-state');
     if (stateEl) {
       const env = runtime === 'kubernetes' ? 'Kubernetes' : 'Compose';
+      const lk = leader && leader.service;
       const leaderTxt = runtime === 'kubernetes'
-        ? ` · Orquestador: <b>${leader && leader.service ? leader.service : '—'}</b>`
+        ? ` · Orquestador: <b>${lk ? esc(LABELS[lk] || lk) : '—'}</b>`
         : '';
-      stateEl.innerHTML = `Estrategia: <b>${strategy}</b> · Entorno: <b>${env}</b>${leaderTxt}`;
+      stateEl.innerHTML = `Estrategia: <b>${esc(strategy)}</b> · Entorno: <b>${env}</b>${leaderTxt}`;
     }
     // Kubernetes shows live replica controls + pod cards under each node.
     const isK8s = runtime === 'kubernetes';
@@ -166,6 +170,41 @@ function node(key, hub) {
       if (list) list.hidden = !isK8s;
     });
     renderCbBadge();
+    renderOrchestrator();
+  }
+  // Marca en el diagrama qué servicio actúa ahora como orquestador. En
+  // Kubernetes, si order-service cae, otro servicio toma el rol (fallback):
+  // se resalta su nodo y se muestra un aviso arriba del flujo.
+  function renderOrchestrator() {
+    const inK8s = runtime === 'kubernetes';
+    const leaderKey = (leader && leader.service) || (inK8s ? null : 'order');
+    const fallback = inK8s && leaderKey !== null && leaderKey !== 'order';
+
+    const banner = $('f-orb-banner');
+    if (banner) {
+      banner.hidden = !fallback;
+      if (fallback) {
+        banner.innerHTML =
+          `<b>⚠ order-service caído</b> — <b>${esc(LABELS[leaderKey] || leaderKey)}</b> está orquestando ahora (fallback automático)`;
+      }
+    }
+
+    SVC_KEYS.forEach((key) => {
+      const el = $('f-' + key);
+      const tag = $('f-' + key + '-ortag');
+      if (!el || !tag) return;
+      el.classList.remove('acting-orch', 'relegated');
+      tag.innerHTML = '';
+      if (!inK8s) return;
+      if (leaderKey === key) {
+        el.classList.add('acting-orch');
+        tag.innerHTML = key === 'order'
+          ? badge('orquestando', 'ok')
+          : badge('orquestando (fallback)', 'warn');
+      } else if (key === 'order') {
+        el.classList.add('relegated');
+      }
+    });
   }
 
   // Circuit breaker badge: only visible in Circuit breaker mode (compose), in
@@ -414,6 +453,8 @@ function node(key, hub) {
         k8s = await API.kubernetes();
         renderK8s();
       } catch (_) {}
+      try { leader = await API.leader(); } catch (_) { leader = null; }
+      renderOrchestrator();
     }
 
     try {
