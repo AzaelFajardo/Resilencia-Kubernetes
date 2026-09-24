@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting for postgres; sleep 2; done"]
+      containers:
+        - name: order-service
+          image: "order-service:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+{{ toYaml .Values.orderService.resources | indent 12 }}
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@postgres:5432/{{ .Values.postgres.db }}"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+            - name: USER_SERVICE_URL
+              value: "http://user-service:8000"
+            - name: INVENTORY_SERVICE_URL
+              value: "http://inventory-service:8000"
+            - name: PAYMENT_SERVICE_URL
+              value: "http://payment-service:8000"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:8000"
+            - name: RETRY_ENABLED
+              value: {{ .Values.orderService.retryEnabled | quote }}
+            - name: RETRY_COUNT
+              value: {{ .Values.orderService.retryCount | quote }}
+            - name: RETRY_DELAY_MS
+              value: {{ .Values.orderService.retryDelayMs | quote }}
+            - name: HTTP_TIMEOUT
+              value: {{ .Values.orderService.httpTimeout | quote }}
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+{{ toYaml .Values.orderService.readinessProbe | indent 12 }}
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+{{ toYaml .Values.orderService.livenessProbe | indent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+spec:
+  selector:
+    app: order-service
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000

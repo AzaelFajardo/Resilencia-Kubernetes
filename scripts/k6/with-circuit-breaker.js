@@ -1,12 +1,19 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { Counter } from 'k6/metrics';
 
 const ORDER_URL = __ENV.ORDER_URL || 'http://order-service:8000/orders';
 const CHAOS_URL = __ENV.CHAOS_URL || 'http://payment-service:8000/chaos/config';
 
+// Counts requests that failed fast because the circuit was OPEN, separate
+// from requests that reached payment-service and got declined - this is
+// the number that shows the breaker actually protecting the system.
+const circuitOpenRejections = new Counter('circuit_breaker_open_rejections');
+
 export const options = {
   vus: 10,
   duration: '30s',
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
 export function setup() {
@@ -36,7 +43,16 @@ export default function () {
 
   const res = http.post(ORDER_URL, payload, params);
   check(res, {
-    'status is 200/201 or 503': (r) => r.status === 200 || r.status === 201 || r.status === 503 || r.status === 500,
+    'status is 200 or 201': (r) => r.status === 200 || r.status === 201,
+    // order-service returns HTTP 200 for every outcome (see
+    // scripts/k6/baseline.js) - this is the real success/fail signal.
+    'order succeeded': (r) => r.json('status') === 'success',
   });
+
+  const body = res.json();
+  if (body && body.downstream && body.downstream.payment && body.downstream.payment.message === 'circuit_breaker_open') {
+    circuitOpenRejections.add(1);
+  }
+
   sleep(1);
 }

@@ -11,11 +11,19 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Base, NotificationRecord, engine, get_db
+from database import Base, NotificationRecord, engine, get_db, AsyncSessionLocal
 from tracing import setup_tracing
+
+from shared.orchestrator import (
+    OrchestratorConfig,
+    build_router,
+    configure,
+    start_leader_loop,
+    stop_leader_loop,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +33,18 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    configure(
+        OrchestratorConfig(
+            service_name="notification-service",
+            priority=int(os.getenv("ORCHESTRATOR_PRIORITY", "20")),
+            get_db=get_db,
+            session_factory=AsyncSessionLocal,
+        )
+    )
+    app.include_router(build_router())
+    await start_leader_loop()
     yield
+    await stop_leader_loop()
 
 
 app = FastAPI(title="notification-service", lifespan=lifespan)
@@ -375,6 +394,66 @@ async def get_notification_by_order(
     if record is None:
         raise HTTPException(status_code=404, detail="Notification not found for order")
     return serialize_notification_record(record)
+
+
+@app.get("/notifications", response_model=list[NotificationRecordSummary])
+async def list_notifications(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id de orden/usuario, estado o canal"),
+    db: AsyncSession = Depends(get_db),
+) -> list[NotificationRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    stmt = select(NotificationRecord).order_by(NotificationRecord.id)
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            NotificationRecord.status.ilike(q),
+            NotificationRecord.preferred_channel.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(NotificationRecord.id == int(search))
+            clauses.append(NotificationRecord.order_id == int(search))
+            clauses.append(NotificationRecord.user_id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    records = result.scalars().all()
+    return [serialize_notification_record(record) for record in records]
+
+
+@app.delete("/notifications")
+async def delete_all_notifications(db: AsyncSession = Depends(get_db)) -> dict:
+    await apply_chaos_latency_and_timeout()
+    await db.execute(delete(NotificationRecord))
+    await db.commit()
+    return {"message": "All notifications deleted successfully"}
+
+
+@app.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(NotificationRecord).where(NotificationRecord.id == notification_id)
+    )
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    await db.delete(record)
+    await db.commit()
+    return {"message": "Notification deleted", "notification_id": notification_id}
+
+
+@app.get("/chaos/config")
+def get_chaos_config():
+    return {
+        "FAILURE_RATE": FAILURE_RATE,
+        "LATENCY_MS": LATENCY_MS,
+        "TIMEOUT_RATE": TIMEOUT_RATE,
+    }
 
 
 @app.post("/chaos/config")

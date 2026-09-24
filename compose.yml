@@ -47,12 +47,17 @@ services:
   # -- Microservices ----------------------------------------------------
 
   user-service:
-    build: ./services/user-service
+    build:
+      context: ./services
+      dockerfile: user-service/Dockerfile
     ports:
       - "${USER_SERVICE_PORT:-8101}:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -67,12 +72,17 @@ services:
       retries: 3
 
   inventory-service:
-    build: ./services/inventory-service
+    build:
+      context: ./services
+      dockerfile: inventory-service/Dockerfile
     ports:
       - "${INVENTORY_SERVICE_PORT:-8102}:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -87,12 +97,17 @@ services:
       retries: 3
 
   payment-service:
-    build: ./services/payment-service
+    build:
+      context: ./services
+      dockerfile: payment-service/Dockerfile
     ports:
       - "${PAYMENT_SERVICE_PORT:-8103}:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -108,12 +123,17 @@ services:
       retries: 3
 
   notification-service:
-    build: ./services/notification-service
+    build:
+      context: ./services
+      dockerfile: notification-service/Dockerfile
     ports:
       - "${NOTIFICATION_SERVICE_PORT:-8104}:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1.0}
       FAILURE_RATE:  ${FAILURE_RATE:-0.0}
       LATENCY_MS:    ${LATENCY_MS:-0}
       TIMEOUT_RATE:  ${TIMEOUT_RATE:-0.0}
@@ -129,12 +149,17 @@ services:
       retries: 3
 
   order-service:
-    build: ./services/order-service
+    build:
+      context: ./services
+      dockerfile: order-service/Dockerfile
     ports:
       - "${ORDER_SERVICE_PORT:-8100}:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db}
       OTEL_EXPORTER_OTLP_ENDPOINT:  http://otel-collector:4317
+      OTEL_SDK_DISABLED:            ${OTEL_SDK_DISABLED:-false}
+      OTEL_TRACES_SAMPLER:          ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+      OTEL_TRACES_SAMPLER_ARG:      ${OTEL_TRACES_SAMPLER_ARG:-1.0}
       USER_SERVICE_URL:              http://user-service:8000
       INVENTORY_SERVICE_URL:         http://inventory-service:8000
       PAYMENT_SERVICE_URL:           http://payment-service:8000
@@ -146,6 +171,7 @@ services:
       FAILURE_RATE:   ${FAILURE_RATE:-0.0}
       LATENCY_MS:     ${LATENCY_MS:-0}
       TIMEOUT_RATE:   ${TIMEOUT_RATE:-0.0}
+      FRAUD_THRESHOLD: ${FRAUD_THRESHOLD:-70}
     depends_on:
       postgres:             {condition: service_healthy}
       data-seeder:          {condition: service_completed_successfully}
@@ -159,30 +185,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-
-  frontend:
-    build:
-      context: ./services/frontend
-      args:
-        VITE_SEED_ENABLED: ${SEED_ENABLED:-true}
-        VITE_SEED_USERS_COUNT: ${SEED_USERS_COUNT:-50000}
-        VITE_ORDER_SERVICE_PORT: ${ORDER_SERVICE_PORT:-8100}
-        VITE_USER_SERVICE_PORT: ${USER_SERVICE_PORT:-8101}
-        VITE_INVENTORY_SERVICE_PORT: ${INVENTORY_SERVICE_PORT:-8102}
-        VITE_PAYMENT_SERVICE_PORT: ${PAYMENT_SERVICE_PORT:-8103}
-        VITE_NOTIFICATION_SERVICE_PORT: ${NOTIFICATION_SERVICE_PORT:-8104}
-        VITE_PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9091}
-        VITE_GRAFANA_PORT: ${GRAFANA_PORT:-3001}
-        VITE_JAEGER_PORT: ${JAEGER_PORT:-16687}
-    ports:
-      - "${FRONTEND_PORT:-5180}:80"
-    depends_on:
-      user-service:         {condition: service_healthy}
-      inventory-service:    {condition: service_healthy}
-      order-service:        {condition: service_healthy}
-      payment-service:      {condition: service_healthy}
-      notification-service: {condition: service_healthy}
-    networks: [app-net]
 
   # -- Observability ----------------------------------------------------
 
@@ -201,6 +203,7 @@ services:
     image: prom/prometheus:v2.51.2
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml
     ports:
       - "${PROMETHEUS_PORT:-9091}:9090"
     networks: [app-net]
@@ -211,6 +214,10 @@ services:
       - "${GRAFANA_PORT:-3001}:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -226,10 +233,59 @@ services:
       - "${JAEGER_GRPC_PORT:-14251}:14250"   # Legacy gRPC
     networks: [app-net]
 
+  # -- Control panel (Phase 12) -----------------------------------------
+
+  control-panel:
+    build: ./services/control-panel
+    ports:
+      - "${CONTROL_PANEL_PORT:-8105}:8000"
+    # host.docker.internal resolves out of the box on Docker Desktop
+    # (Windows/macOS); this extra host makes it resolve on plain Linux too,
+    # so the optional Kubernetes panel works on every platform.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ORDER_SERVICE_URL: http://order-service:8000
+      USER_SERVICE_URL: http://user-service:8000
+      INVENTORY_SERVICE_URL: http://inventory-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+      NOTIFICATION_SERVICE_URL: http://notification-service:8000
+      PROMETHEUS_URL: http://prometheus:9090
+      GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3001}
+      # Kubernetes panel is opt-in and platform-agnostic. Leave K8S_API_SERVER
+      # empty to disable it (the panel returns 503 "not configured"). To enable
+      # it, set K8S_API_SERVER (e.g. https://host.docker.internal:<minikube API
+      # port>) and drop the cluster client certs into ./k8s/certs/ (ca.crt,
+      # client.crt, client.key). See .env.example.
+      K8S_API_SERVER: ${K8S_API_SERVER:-}
+      K8S_CA_FILE: ${K8S_CA_FILE:-/kube/ca.crt}
+      K8S_CLIENT_CERT_FILE: ${K8S_CLIENT_CERT_FILE:-/kube/client.crt}
+      K8S_CLIENT_KEY_FILE: ${K8S_CLIENT_KEY_FILE:-/kube/client.key}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - ./services/control-panel/static:/app/static:ro
+      # Local, machine-specific Kubernetes client certificates. The directory
+      # ships empty (gitignored); it is safe to mount on every platform.
+      - ./k8s/certs:/kube:ro
+    depends_on:
+      - order-service
+      - user-service
+      - inventory-service
+      - payment-service
+      - notification-service
+    networks:
+      - app-net
+      - minikube
+
 # Shared bridge network for local service-to-service communication.
 networks:
   app-net:
     driver: bridge
+  # External networking bridge created by "minikube start --driver=docker".
+  # Puts the control-panel container on the cluster network so it can reach
+  # the kube-apiserver (K8S_API_SERVER) and port-forwarded services directly.
+  minikube:
+    external: true
 
 # Persistent volumes.
 volumes:

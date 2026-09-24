@@ -6,6 +6,7 @@ const ORDER_URL = __ENV.ORDER_URL || 'http://order-service:8000/orders';
 export const options = {
   vus: 10,
   duration: '30s',
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
 export default function () {
@@ -24,6 +25,10 @@ export default function () {
   const res = http.post(ORDER_URL, payload, params);
   check(res, {
     'status is 200 or 201': (r) => r.status === 200 || r.status === 201,
+    // order-service returns HTTP 200 even for business failures (out of
+    // stock, payment declined, etc.), so the HTTP check above only proves
+    // the request was served - this checks the actual order outcome.
+    'order succeeded': (r) => r.json('status') === 'success',
   });
   sleep(1);
 }

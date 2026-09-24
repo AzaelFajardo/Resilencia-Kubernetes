@@ -18,8 +18,17 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func
-from database import engine, Base, get_db, User
+from sqlalchemy import desc, func, or_, text, delete
+from database import engine, Base, get_db, User, Order, AsyncSessionLocal
+import faker_utils
+
+from shared.orchestrator import (
+    OrchestratorConfig,
+    build_router,
+    configure,
+    start_leader_loop,
+    stop_leader_loop,
+)
 
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -28,7 +37,18 @@ from prometheus_fastapi_instrumentator import Instrumentator
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    configure(
+        OrchestratorConfig(
+            service_name="user-service",
+            priority=int(os.getenv("ORCHESTRATOR_PRIORITY", "40")),
+            get_db=get_db,
+            session_factory=AsyncSessionLocal,
+        )
+    )
+    app.include_router(build_router())
+    await start_leader_loop()
     yield
+    await stop_leader_loop()
 
 # ── FastAPI application ────────────────────────────────────────────────
 app = FastAPI(title="user-service", lifespan=lifespan)
@@ -141,6 +161,11 @@ class ChaosConfig(BaseModel):
     LATENCY_MS: Optional[int] = None
     TIMEOUT_RATE: Optional[float] = None
 
+class UserPatch(BaseModel):
+    """Partial profile update. Only ``data`` is accepted; its keys are
+    shallow-merged over the existing JSONB profile."""
+    data: Optional[dict] = None
+
 # ── Response model wrapping customer data with global fields ───────────
 class CustomerResponse(BaseModel):
     """Full response envelope including metadata, security, and customer data."""
@@ -168,6 +193,18 @@ class RecentUserSummary(BaseModel):
     email: str
     first_name: str
     active: bool
+
+
+class OrderHistoryItem(BaseModel):
+    """One order in a customer's history, per the proposal's spec that
+    user-service owns 'el historial de pedidos' - read from the shared
+    `orders` table (order-service's own table) rather than duplicating it."""
+    id: int
+    product_id: int
+    quantity: int
+    total_price: float
+    status: str
+    created_at: str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -327,10 +364,28 @@ async def create_user(customer: Customer, db: AsyncSession = Depends(get_db)) ->
 
 
 @app.get("/users", response_model=List[Customer])
-async def list_users(db: AsyncSession = Depends(get_db)) -> List[Customer]:
-    """Lists all customers."""
+async def list_users(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id, nombre o email (parcial)"),
+    db: AsyncSession = Depends(get_db),
+) -> List[Customer]:
+    """Lists customers, ordered by id ascending, with offset/limit pagination
+    and optional search by id, first_name, last_name or email."""
     await apply_chaos()
-    result = await db.execute(select(User))
+    stmt = select(User).order_by(User.id.asc())
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            User.data['first_name'].astext.ilike(q),
+            User.data['last_name'].astext.ilike(q),
+            User.data['email'].astext.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(User.id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
     users = result.scalars().all()
     return [build_customer_model(u.data) for u in users]
 
@@ -376,6 +431,25 @@ async def generate_users(db: AsyncSession = Depends(get_db)):
     return {"message": f"{count} users generated."}
 
 
+@app.post("/users/faker")
+async def generate_faker_users(
+    count: int = Query(10, ge=1, le=100000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generates `count` Faker users on demand (idempotent-safe: assigns ids
+    starting after the current max). Used by the control panel for unlimited
+    synthetic-data generation."""
+    await apply_chaos()
+    max_id = await db.scalar(select(func.max(User.id))) or 0
+    start = max_id + 1
+    rows = [User(id=r["id"], data=r) for r in faker_utils.iter_user_records(count, start)]
+    db.add_all(rows)
+    await db.commit()
+    await db.execute(text("SELECT setval('users_id_seq', (SELECT MAX(id) FROM users));"))
+    await db.commit()
+    return {"message": f"{count} faker users generated", "start_id": start, "end_id": start + count - 1}
+
+
 @app.get("/users/{user_id}", response_model=CustomerResponse)
 async def get_user(user_id: int, request: Request, db: AsyncSession = Depends(get_db)) -> CustomerResponse:
     """Retrieves a specific customer by identifier with full profile and global fields."""
@@ -386,6 +460,57 @@ async def get_user(user_id: int, request: Request, db: AsyncSession = Depends(ge
         security=build_security(request),
         customer=customer,
     )
+
+
+@app.patch("/users/{user_id}", response_model=Customer)
+async def update_user(
+    user_id: int,
+    patch: UserPatch,
+    db: AsyncSession = Depends(get_db),
+) -> Customer:
+    """Partially updates a customer profile. Fields present in ``patch.data``
+    are merged over the existing profile (shallow merge), so callers can send
+    e.g. ``{"data": {"active": false}}`` without resending all 20 fields."""
+    await apply_chaos()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    db_user = result.scalars().first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    if patch.data is not None:
+        merged = (db_user.data or {}).copy()
+        merged.update(patch.data)
+        db_user.data = merged
+
+    await db.commit()
+    await db.refresh(db_user)
+    return build_customer_model(db_user.data)
+
+
+@app.delete("/users")
+async def clear_all_users(db: AsyncSession = Depends(get_db)):
+    """Deletes ALL customers from the database."""
+    await apply_chaos()
+    result = await db.execute(select(func.count()).select_from(User))
+    count = result.scalar_one()
+    await db.execute(delete(User))
+    await db.commit()
+    return {"message": "All customers deleted", "count": count}
+
+
+@app.delete("/users/{user_id}")
+async def delete_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    """Deletes a customer by identifier. The database cascades the delete to
+    related orders/payments/notifications rows (study tool: FK ON DELETE CASCADE)."""
+    await apply_chaos()
+    result = await db.execute(select(User).filter(User.id == user_id))
+    db_user = result.scalars().first()
+    if db_user is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    await db.delete(db_user)
+    await db.commit()
+    return {"message": f"Customer {user_id} deleted"}
 
 
 @app.get("/users/{user_id}/validate", response_model=CustomerValidationResponse)
@@ -414,6 +539,44 @@ async def validate_user(user_id: int, request: Request, db: AsyncSession = Depen
         message="Customer exists but is inactive",
         customer=customer,
     )
+
+@app.get("/users/{user_id}/orders", response_model=List[OrderHistoryItem])
+async def get_user_orders(
+    user_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> List[OrderHistoryItem]:
+    """Order history for a customer (proposal spec: user-service owns
+    'validación y el historial de pedidos'). 404s if the customer doesn't
+    exist; an empty list is a valid response for a customer with no orders
+    yet, distinct from a 404."""
+    await apply_chaos()
+    await get_customer_or_404(user_id, db)
+    result = await db.execute(
+        select(Order).filter(Order.user_id == user_id).order_by(desc(Order.id)).limit(limit)
+    )
+    orders = result.scalars().all()
+    return [
+        OrderHistoryItem(
+            id=o.id,
+            product_id=o.product_id,
+            quantity=o.quantity,
+            total_price=float(o.total_price),
+            status=str(o.status),
+            created_at=o.created_at.isoformat(),
+        )
+        for o in orders
+    ]
+
+
+@app.get("/chaos/config")
+def get_chaos_config():
+    return {
+        "FAILURE_RATE": FAILURE_RATE,
+        "LATENCY_MS": LATENCY_MS,
+        "TIMEOUT_RATE": TIMEOUT_RATE,
+    }
+
 
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):

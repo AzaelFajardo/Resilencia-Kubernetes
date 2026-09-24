@@ -9,7 +9,7 @@ to simulate a production-grade Amazon-like system.
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 import asyncio
@@ -18,8 +18,17 @@ import uuid
 import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import desc, func, update
-from database import engine, Base, get_db, Product as DBProduct
+from sqlalchemy import desc, func, update, or_, text, delete
+from database import engine, Base, get_db, Product as DBProduct, AsyncSessionLocal
+import faker_utils
+
+from shared.orchestrator import (
+    OrchestratorConfig,
+    build_router,
+    configure,
+    start_leader_loop,
+    stop_leader_loop,
+)
 
 # This library automatically collects metrics such as request count, latency, and errors.
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -28,7 +37,18 @@ from prometheus_fastapi_instrumentator import Instrumentator
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    configure(
+        OrchestratorConfig(
+            service_name="inventory-service",
+            priority=int(os.getenv("ORCHESTRATOR_PRIORITY", "60")),
+            get_db=get_db,
+            session_factory=AsyncSessionLocal,
+        )
+    )
+    app.include_router(build_router())
+    await start_leader_loop()
     yield
+    await stop_leader_loop()
 
 # ── FastAPI application ────────────────────────────────────────────────
 app = FastAPI(title="inventory-service", lifespan=lifespan)
@@ -330,13 +350,44 @@ async def generate_inventory(db: AsyncSession = Depends(get_db)):
     return {"message": f"{count} products generated."}
 
 
+@app.post("/inventory/faker")
+async def generate_faker_products(
+    count: int = Query(10, ge=1, le=100000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generates `count` Faker products on demand (ids after the current max).
+    Used by the control panel for unlimited synthetic-data generation."""
+    await apply_chaos()
+    max_id = await db.scalar(select(func.max(DBProduct.id))) or 0
+    start = max_id + 1
+    rows = [
+        DBProduct(id=r["product_id"], quantity=r["quantity"], data=r)
+        for r in faker_utils.iter_product_records(count, start)
+    ]
+    db.add_all(rows)
+    await db.commit()
+    await db.execute(text("SELECT setval('products_id_seq', (SELECT MAX(id) FROM products));"))
+    await db.commit()
+    return {"message": f"{count} faker products generated", "start_id": start, "end_id": start + count - 1}
+
+
 @app.get("/inventory", response_model=List[Product])
 async def list_inventory(
-    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id o nombre (parcial)"),
     db: AsyncSession = Depends(get_db),
 ) -> List[Product]:
     await apply_chaos()
-    result = await db.execute(select(DBProduct).order_by(desc(DBProduct.id)).limit(limit))
+    stmt = select(DBProduct).order_by(desc(DBProduct.id))
+    if search:
+        q = f"%{search}%"
+        clauses = [DBProduct.data['name'].astext.ilike(q)]
+        if search.isdigit():
+            clauses.append(DBProduct.id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
     products = result.scalars().all()
     return [construct_product_model(product) for product in products]
 
@@ -454,6 +505,15 @@ async def release_inventory(product_id: int, req: ReserveRequest, db: AsyncSessi
     await db.commit()
     return {"message": "Stock released", "released": req.quantity}
 
+@app.get("/chaos/config")
+def get_chaos_config():
+    return {
+        "FAILURE_RATE": FAILURE_RATE,
+        "LATENCY_MS": LATENCY_MS,
+        "TIMEOUT_RATE": TIMEOUT_RATE,
+    }
+
+
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
     global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
@@ -471,3 +531,80 @@ def update_chaos_config(config: ChaosConfig):
             "TIMEOUT_RATE": TIMEOUT_RATE
         }
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MANUAL PRODUCT CRUD  –  POST / PATCH / DELETE
+# ═══════════════════════════════════════════════════════════════════════
+
+class ProductUpdate(BaseModel):
+    """Partial update body: only the provided fields are applied."""
+    quantity: Optional[int] = Field(default=None, ge=0)
+    data: Optional[dict] = None
+
+
+@app.post("/inventory", response_model=Product)
+async def create_product(product: Product, db: AsyncSession = Depends(get_db)) -> Product:
+    """Creates a product manually. Returns 409 if the id already exists."""
+    await apply_chaos()
+    result = await db.execute(select(DBProduct).filter(DBProduct.id == product.product_id))
+    if result.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail=f"Product {product.product_id} already exists")
+    data_dict = product.model_dump() if hasattr(product, "model_dump") else product.dict()
+    db.add(DBProduct(id=product.product_id, quantity=product.quantity, data=data_dict))
+    await db.commit()
+    return product
+
+
+@app.patch("/inventory/{product_id}", response_model=ProductResponse)
+async def update_product(
+    product_id: int,
+    patch: ProductUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> ProductResponse:
+    """Partially updates a product by ID, serialized like the detail GET."""
+    await apply_chaos()
+    db_product = await get_db_product_or_404(product_id, db)
+
+    if patch.quantity is not None:
+        db_product.quantity = patch.quantity
+
+    if patch.data is not None:
+        merged_data = db_product.data.copy()
+        merged_data.update(patch.data)
+        db_product.data = merged_data
+
+    await db.commit()
+    product = construct_product_model(db_product)
+    return ProductResponse(
+        metadata=build_metadata(request),
+        security=build_security(request),
+        item=product,
+    )
+
+
+@app.delete("/inventory")
+async def clear_all_inventory(db: AsyncSession = Depends(get_db)):
+    """Deletes ALL products from the database."""
+    await apply_chaos()
+    result = await db.execute(select(func.count()).select_from(DBProduct))
+    count = result.scalar_one()
+    await db.execute(delete(DBProduct))
+    await db.commit()
+    return {"message": "All products deleted", "count": count}
+
+
+@app.delete("/inventory/{product_id}")
+async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
+    """Deletes a product by ID.
+
+    The database defines an ``orders`` table with a foreign key to
+    ``products(id)`` using ``ON DELETE CASCADE``, so any orders referencing
+    this product are removed automatically along with it.
+    """
+    await apply_chaos()
+    db_product = await get_db_product_or_404(product_id, db)
+    await db.delete(db_product)
+    await db.commit()
+    return {"message": f"Product {product_id} deleted."}

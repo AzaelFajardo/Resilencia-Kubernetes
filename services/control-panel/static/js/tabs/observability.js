@@ -1,0 +1,176 @@
+// observability.js — Observabilidad: latencia, throughput, recursos, alertas,
+// objetivos de Prometheus y Grafana embebido. El refresco es controlable por
+// pestaña; el disco (lento, socket Docker) se actualiza aparte.
+
+import { API } from '../api.js';
+import { card, table, esc, fmt, badge, dot } from '../ui.js';
+import { mountRefreshControl } from '../interval.js';
+
+export function render(view) {
+  view.innerHTML = `
+    <div class="grid">
+      ${card('Latencia por servicio (p50 / p95 / p99)',
+        'Percentiles de la duración de cada petición por servicio, sobre el histograma de Prometheus. p50 = mediana (la mitad tarda menos). p95 = el 95% tarda menos que esto. p99 = el 99% tarda menos (cola larga). Cuanto mayor sea la diferencia p50→p99, más variable es la latencia.',
+        `<table class="tbl"><thead><tr>` +
+          `<th>Servicio</th>` +
+          `<th data-tip="Mediana: la mitad de las peticiones responde en menos de este tiempo. Es la latencia 'típica'.">p50 (s)</th>` +
+          `<th data-tip="El 95% de las peticiones responde en menos de este tiempo. Muestra qué tan mal van el 5% más lento.">p95 (s)</th>` +
+          `<th data-tip="El 99% de las peticiones responde en menos de este tiempo. Si p99 es mucho mayor que p50, hay una 'cola larga' (latencia inestable).">p99 (s)</th>` +
+        `</tr></thead><tbody id="o-lat"></tbody></table>`
+          .replace('<tbody></tbody>', '<tbody id="o-lat"></tbody>'))}
+      ${card('Throughput y errores por servicio',
+        'Peticiones por segundo (req/s) de cada servicio y su tasa de error (5xx). Tasa de error = errores/s ÷ req/s. Recuerda: order/payment/notification devuelven HTTP 200 incluso en fallos de negocio, así que solo los 5xx (errores de transporte) cuentan aquí.',
+        table(['Servicio', 'req/s', 'errores/s', 'tasa error (%)'], [])
+          .replace('<tbody></tbody>', '<tbody id="o-tp"></tbody>'))}
+      ${card('Recursos por servicio (CPU / RAM / Disco)',
+        'CPU en núcleos (rate de process_cpu_seconds_total), RAM residente en MiB (process_resident_memory_bytes) y escritura de disco acumulada en MiB (leída del socket de Docker, sin contador Prometheus). El disco se actualiza aparte (~30 s) por ser una lectura lenta.',
+        '<div id="o-res" class="res-grid"><div class="muted">cargando…</div></div>')}
+      ${card('Objetivos de Prometheus (scrape)',
+        'Los 6 objetivos que Prometheus está raspando (5 microservicios + otel-collector) y su salud. Si un servicio está caído, su objetivo pasa a "down".',
+        table(['Job', 'Instancia', 'Salud'], [])
+          .replace('<tbody></tbody>', '<tbody id="o-targets"></tbody>'))}
+    </div>
+    ${card('Grafana — Resilencia Overview',
+      'Dashboard de Grafana con 12 paneles de los 4 sectores de la propuesta: desempeño, resiliencia, recursos y observabilidad. Embebido en modo kiosk.',
+      '<iframe class="grafana" id="o-graf" src="about:blank" loading="lazy"></iframe>',
+      { full: true })}
+  `;
+
+  const $ = (id) => view.querySelector('#' + id);
+
+  let diskCache = {};
+  let grafanaBase = null;
+  let diskInFlight = false;
+
+  const refreshCleanup = mountRefreshControl(view, { onRefresh: refresh, initial: 5 });
+  refresh();
+  refreshDisk();
+  const diskTimer = setInterval(refreshDisk, 30000);
+  initGrafana();
+  document.addEventListener('themechange', setGrafanaSrc);
+
+  const cleanup = () => { refreshCleanup(); clearInterval(diskTimer); document.removeEventListener('themechange', setGrafanaSrc); };
+  return cleanup;
+
+  async function refresh() {
+    try {
+      const d = await API.latency();
+      $('o-lat').innerHTML = Object.entries(d).map(([k, v]) =>
+        `<tr><td>${esc(k)}-service</td><td>${fmt(v.p50, 3)}</td><td>${fmt(v.p95, 3)}</td><td>${fmt(v.p99, 3)}</td></tr>`
+      ).join('') || `<tr><td colspan="4" class="muted">sin datos de latencia</td></tr>`;
+    } catch (_) {}
+
+    try {
+      const d = await API.throughput();
+      $('o-tp').innerHTML = Object.entries(d).map(([k, v]) =>
+        `<tr><td>${esc(k)}-service</td><td>${fmt(v.rps, 2)}</td><td>${fmt(v.errors, 2)}</td><td>${v.error_rate != null ? esc(v.error_rate) : '—'}</td></tr>`
+      ).join('') || `<tr><td colspan="4" class="muted">sin tráfico reciente</td></tr>`;
+    } catch (_) {}
+
+    try {
+      const res = await API.resources();
+      const entries = Object.entries(res);
+      $('o-res').innerHTML = entries.map(([inst, v]) => {
+        const svc = inst.split('-')[0];
+        const cpuCores = v.cpu_cores || 0;
+        const memMib = v.mem_mib || 0;
+        const diskVal = diskCache[svc];
+        const diskMib = diskVal != null ? parseFloat(diskVal) : 0;
+
+        const cpuPct = Math.min(100, Math.max(cpuCores > 0 ? 4 : 0, Math.round((cpuCores / 0.20) * 100)));
+        const ramPct = Math.min(100, Math.max(memMib > 0 ? 4 : 0, Math.round((memMib / 256) * 100)));
+        const diskPct = Math.min(100, Math.max(diskMib > 0 ? 4 : 0, Math.round((diskMib / 100) * 100)));
+
+        return `
+          <div class="res-card">
+            <div class="res-card-header">
+              <span class="res-svc-title">
+                <span class="dot up"></span> ${esc(inst)}
+              </span>
+            </div>
+            <div class="res-metrics-grid">
+              <div class="res-metric-item">
+                <div class="res-metric-meta">
+                  <span>CPU</span>
+                  <span class="res-metric-val">${fmt(cpuCores, 3)} cores</span>
+                </div>
+                <div class="res-bar-track" title="${fmt(cpuCores, 3)} cores">
+                  <div class="res-bar-fill cpu" style="width: ${cpuPct}%;"></div>
+                </div>
+              </div>
+              <div class="res-metric-item">
+                <div class="res-metric-meta">
+                  <span>RAM</span>
+                  <span class="res-metric-val">${fmt(memMib, 1)} MiB</span>
+                </div>
+                <div class="res-bar-track" title="${fmt(memMib, 1)} MiB">
+                  <div class="res-bar-fill ram" style="width: ${ramPct}%;"></div>
+                </div>
+              </div>
+              <div class="res-metric-item">
+                <div class="res-metric-meta">
+                  <span>Disco</span>
+                  <span class="res-metric-val o-disk-val" data-svc="${esc(svc)}">${diskVal != null ? esc(diskVal) + ' MiB' : '—'}</span>
+                </div>
+                <div class="res-bar-track">
+                  <div class="res-bar-fill disk o-disk-bar" data-svc="${esc(svc)}" style="width: ${diskPct}%;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('') || `<div class="muted">sin datos (Prometheus vacío)</div>`;
+    } catch (_) {}
+
+    try {
+      const d = await API.targets();
+      const list = d.targets || [];
+      $('o-targets').innerHTML = list.map((tg) =>
+        `<tr><td>${esc(tg.job)}</td><td>${esc(tg.instance)}</td><td>${dot(tg.health === 'up')}${esc(tg.health)}</td></tr>`
+      ).join('') || `<tr><td colspan="3" class="muted">sin objetivos</td></tr>`;
+    } catch (_) { $('o-targets').innerHTML = `<tr><td colspan="3" class="muted">no disponible</td></tr>`; }
+  }
+
+
+
+  async function refreshDisk() {
+    if (diskInFlight) return;
+    diskInFlight = true;
+    try {
+      diskCache = await API.disk();
+    } catch (_) {
+      diskCache = {};
+    } finally {
+      diskInFlight = false;
+    }
+    view.querySelectorAll('.o-disk-val').forEach((el) => {
+      const val = diskCache[el.dataset.svc];
+      el.textContent = val != null ? `${val} MiB` : '—';
+    });
+    view.querySelectorAll('.o-disk-bar').forEach((bar) => {
+      const val = parseFloat(diskCache[bar.dataset.svc]);
+      if (!isNaN(val) && val > 0) {
+        const pct = Math.min(100, Math.max(4, Math.round((val / 100) * 100)));
+        bar.style.width = `${pct}%`;
+      } else {
+        bar.style.width = '0%';
+      }
+    });
+  }
+
+  async function initGrafana() {
+    try {
+      if (!grafanaBase) {
+        const cfg = await API.config();
+        grafanaBase = cfg.grafana_url;
+      }
+      setGrafanaSrc();
+    } catch (_) {}
+  }
+
+  function setGrafanaSrc() {
+    if (!grafanaBase) return;
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    $('o-graf').src = `${grafanaBase}/d/resilencia-overview/resilencia-overview?orgId=1&kiosk&refresh=10s&theme=${theme}`;
+  }
+}

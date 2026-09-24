@@ -20,6 +20,8 @@ Uso: ./run.sh [comando]
 
 Comandos:
   up      Construye e inicia todo el stack en segundo plano (por defecto)
+  k8s     Levanta todo contemplando Kubernetes (minikube + manifiestos + Compose)
+  stop    Detiene todo de forma ordenada y sin forzar (Compose + minikube)
   build   Reconstruye las imagenes sin cache
   down    Detiene el stack y elimina los contenedores
   reset   Detiene, borra volumenes y vuelve a iniciar desde cero
@@ -27,6 +29,10 @@ Comandos:
   ps      Muestra el estado de los contenedores
   status  Muestra el estado y recuerda las URLs principales
   help    Muestra esta ayuda
+
+Atajos de Kubernetes (delegan en scripts/):
+  ./run.sh k8s     -> scripts/up.sh    (opciones: --compose-only, --k8s-only, --no-build, --reset)
+  ./run.sh stop    -> scripts/down.sh  (opciones: --compose-only, --k8s-only, --keep-cluster, --purge)
 
 Configuracion: copia .env.example a .env para ajustar seed, chaos y DB.
 EOF
@@ -36,22 +42,30 @@ case "$COMMAND" in
   help)
     show_help
     ;;
+  k8s)
+    shift
+    exec "$(dirname "$0")/scripts/up.sh" "$@"
+    ;;
+  stop)
+    shift
+    exec "$(dirname "$0")/scripts/down.sh" "$@"
+    ;;
   up)
-    docker compose up --build -d
+    docker compose up --build -d --remove-orphans
     echo ""
-    echo "Stack iniciado. Panel: http://localhost:5180"
+    echo "Stack iniciado."
     ;;
   build)
     docker compose build --no-cache
     ;;
   down)
-    docker compose down
+    docker compose down --remove-orphans
     ;;
   reset)
-    docker compose down -v
-    docker compose up --build -d
+    docker compose down -v --remove-orphans
+    docker compose up --build -d --remove-orphans
     echo ""
-    echo "Stack reiniciado desde cero. Panel: http://localhost:5180"
+    echo "Stack reiniciado desde cero."
     ;;
   logs)
     docker compose logs -f
@@ -64,7 +78,6 @@ case "$COMMAND" in
     cat <<'EOF'
 
 URLs utiles:
-  Panel:        http://localhost:5180
   Swagger:      http://localhost:8100/docs .. http://localhost:8104/docs
   Prometheus:   http://localhost:9091
   Grafana:      http://localhost:3001  (admin / admin)

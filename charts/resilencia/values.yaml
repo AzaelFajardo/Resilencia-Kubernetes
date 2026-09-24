@@ -1,0 +1,58 @@
+image:
+  pullPolicy: Never
+  tag: latest
+
+# The 4 downstream microservices (order-service is templated separately -
+# it has extra env vars, resource limits and looser probe timings, see
+# templates/order-service.yaml).
+microservices:
+  - name: user-service
+  - name: inventory-service
+  - name: payment-service
+    hasTimeoutRate: true
+    resources:
+      requests: { cpu: 100m }
+      limits: { cpu: 200m }
+  - name: notification-service
+
+probes:
+  readiness: { initialDelaySeconds: 5, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 3 }
+  liveness: { initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+
+orderService:
+  resources:
+    requests: { cpu: 100m }
+    limits: { cpu: 200m }
+  retryEnabled: false
+  retryCount: 3
+  retryDelayMs: 100
+  httpTimeout: "5.0"
+  # Retuned in Phase 10 (kubernetes-results.md): the original 3s
+  # liveness timeout self-restarted order-service under genuine CPU
+  # saturation. Wider timeout/failureThreshold + slower period gives the
+  # HPA time to add replicas before liveness gives up on this one.
+  readinessProbe: { initialDelaySeconds: 5, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 3 }
+  livenessProbe: { initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 10, failureThreshold: 4 }
+
+hpa:
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+postgres:
+  image: postgres:16-alpine
+  user: resilencia
+  password: resilencia_secret
+  db: resilencia_db
+
+seed:
+  enabled: true
+  usersCount: 50000
+  productsCount: 0
+
+observability:
+  otelCollectorImage: otel/opentelemetry-collector-contrib:0.99.0
+  prometheusImage: prom/prometheus:v2.51.2
+  grafanaImage: grafana/grafana:10.4.2
+  grafanaAdminPassword: admin
+  jaegerImage: jaegertracing/all-in-one:1.57

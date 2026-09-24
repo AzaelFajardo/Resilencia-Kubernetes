@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resilencia-Kubernetes — Panel de control</title>
+<script>
+  // Apply the saved theme before first paint to avoid a flash of the wrong theme.
+  (function () {
+    try {
+      var t = localStorage.getItem('theme');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  })();
+</script>
+<link rel="stylesheet" href="/css/main.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="k8s-logo" viewBox="0 0 24 24" width="38" height="38" aria-hidden="true">
+      <path fill="currentColor" d="M16.469 7.086a5.534 5.534 0 0 0-1.214-1.354l-.804-.536a.604.604 0 0 0-.648-.02l-.118.069a.611.611 0 0 0-.147.095l-.116.087-.057.047-.92.691a5.575 5.575 0 0 0-1.14-.378l-.146-.023v-.45a.611.611 0 0 0-.605-.61h-.103a.606.606 0 0 0-.605.61v.448l-.146.024a5.574 5.574 0 0 0-1.14.377l-.92-.69-.057-.048-.116-.086-.148-.096a.611.611 0 0 0-.766.088l-.687.687a.606.606 0 0 0 .088.765l.09.067.536.804c-.135.264-.253.535-.345.813l-.235.125-.368-.258a.606.606 0 0 0-.836.152l-.154.258a.606.606 0 0 0 .152.836l.368.258.06.011c.07.243.16.48.269.708l-.136.337-.432.114a.606.606 0 0 0-.35.782l.227.606a.606.606 0 0 0 .781.35l.432-.114.136-.337c.228.11.465.199.708.27l.011.06-.258.368a.606.606 0 0 0 .152.836l.258.154a.606.606 0 0 0 .836-.152l.258-.368.125-.235c.278.092.55.21.813.345l.804.536.067.09a.606.606 0 0 0 .765-.088l.687-.687a.606.606 0 0 0-.088-.766l-.536-.804c.135-.264.253-.535.345-.813l.235-.125.368.258a.606.606 0 0 0 .836-.152l.154-.258a.606.606 0 0 0-.152-.836l-.368-.258-.06-.011a5.546 5.546 0 0 0-.269-.708l.136-.337.432-.114a.606.606 0 0 0 .35-.782l-.227-.606a.606.606 0 0 0-.781-.35l-.432.114-.136.337a5.546 5.546 0 0 0-.708-.27l-.011-.06.258-.368a.606.606 0 0 0-.152-.836l-.258-.154a.606.606 0 0 0-.836.152l-.258.368-.125.235c-.278-.092-.55-.21-.813-.345Zm-4.468 6.409a2.273 2.273 0 1 1 0-4.546 2.273 2.273 0 0 1 0 4.546Z"/>
+    </svg>
+    <div>
+      <h1>RESILENCIA-KUBERNETES</h1>
+      <span class="sub">Panel de control</span>
+    </div>
+  </div>
+  <div class="health" id="healthStrip" data-tip="Estado en vivo de los 5 microservicios (GET /health)"></div>
+  <button id="themeToggle" class="btn sm secondary" data-tip="Alternar entre modo claro y oscuro">Oscuro</button>
+  <div class="links">
+    <a href="http://localhost:3001" target="_blank" data-tip="Visualización de métricas (Grafana)">Grafana</a>
+    <a href="http://localhost:16687" target="_blank" data-tip="Visualización de trazas distribuidas (Jaeger)">Jaeger</a>
+    <a href="http://localhost:9091" target="_blank" data-tip="Consultas y objetivos de métricas (Prometheus)">Prometheus</a>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <a href="#/home" data-tab="home">Inicio</a>
+  <a href="#/pruebas" data-tab="pruebas">Pruebas</a>
+  <a href="#/observability" data-tab="observability">Observabilidad</a>
+  <a href="#/kubernetes" data-tab="kubernetes">Kubernetes</a>
+  <a href="#/orders" data-tab="orders">Órdenes</a>
+  <a href="#/users" data-tab="users">Clientes</a>
+  <a href="#/inventory" data-tab="inventory">Inventario</a>
+  <a href="#/payments" data-tab="payments">Pagos</a>
+  <a href="#/notifications" data-tab="notifications">Notificaciones</a>
+</nav>
+
+<main id="view" class="view"></main>
+
+<div id="toasts" class="toasts"></div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

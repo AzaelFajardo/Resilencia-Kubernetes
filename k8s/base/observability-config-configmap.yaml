@@ -1,0 +1,117 @@
+# Real gap found during Phase 10: the prometheus/otel-collector Deployments
+# in this file never mounted observability/prometheus.yml or
+# observability/otel-collector.yaml - they ran on the image's built-in
+# default config, so Kubernetes' own Prometheus was only ever scraping
+# itself (confirmed live: only the "prometheus" job existed, not
+# "microservices"/"otel-collector"), and otel-collector likely wasn't
+# wired to forward traces to Jaeger or metrics to :8889 either. This
+# ConfigMap mirrors observability/prometheus.yml and
+# observability/otel-collector.yaml verbatim (K8s Service DNS names match
+# the Compose container names, so no changes were needed) - keep both in
+# sync if either source file changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 10s
+      evaluation_interval: 15s
+
+    rule_files:
+      - /etc/prometheus/alerts.yml
+
+    scrape_configs:
+      - job_name: otel-collector
+        static_configs:
+          - targets: ["otel-collector:8889"]
+
+      - job_name: microservices
+        static_configs:
+          - targets:
+              - "order-service:8000"
+              - "payment-service:8000"
+              - "notification-service:8000"
+              - "user-service:8000"
+              - "inventory-service:8000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+
+    exporters:
+      otlp/jaeger:
+        endpoint: jaeger:4317
+        tls:
+          insecure: true
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+      debug:
+        verbosity: basic
+
+    service:
+      pipelines:
+        traces:
+          receivers:  [otlp]
+          processors: [batch]
+          exporters:  [otlp/jaeger, debug]
+        metrics:
+          receivers:  [otlp]
+          processors: [batch]
+          exporters:  [prometheus, debug]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alerts
+data:
+  alerts.yml: |
+    groups:
+      - name: resilencia-alerts
+        rules:
+          - alert: ServiceDown
+            expr: up{job=~"microservices|otel-collector"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ $labels.instance }} is down"
+              description: "Prometheus has not scraped {{ $labels.instance }} ({{ $labels.job }}) successfully for 1m."
+          - alert: CircuitBreakerOpen
+            expr: circuit_breaker_state == 2
+            for: 1m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Circuit breaker to {{ $labels.service }} is OPEN"
+              description: "order-service's circuit breaker to {{ $labels.service }} has been OPEN for over 1m."
+          - alert: HighOrderLatencyP95
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler="/orders"}[5m])) by (le)) > 1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "order-service p95 latency above 1s"
+              description: "POST /orders p95 latency above 1s for 2m."
+          - alert: HighOrderErrorRate
+            expr: sum(rate(http_requests_total{handler="/orders",status=~"5.."}[5m])) / sum(rate(http_requests_total{handler="/orders"}[5m])) > 0.05
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "order-service 5xx rate above 5%"
+              description: "Only catches transport-level 5xx - business failures return HTTP 200 by design, see docs/RESULTS.md."

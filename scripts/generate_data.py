@@ -2,14 +2,14 @@
 generate_data.py - Faker-based data generator for Resilencia-Kubernetes.
 
 Supported entities:
-  - users
-  - products
-  - all
+- users
+- products
+- all
 
 Examples:
-  python scripts/generate_data.py --entity users --count 10 --format sql
-  python scripts/generate_data.py --entity products --count 25 --format json
-  python scripts/generate_data.py --entity all --count 5 --dry-run
+python scripts/generate_data.py --entity users --count 10 --format sql
+python scripts/generate_data.py --entity products --count 25 --format json
+python scripts/generate_data.py --entity all --count 5 --dry-run
 """
 
 from __future__ import annotations

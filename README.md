@@ -29,7 +29,7 @@ Los puertos son configurables via `.env` (ver `.env.example`). Valores por defec
 | `inventory-service` | `8102` | Consulta, reserva y libera inventario |
 | `payment-service` | `8103` | Simula y persiste pagos |
 | `notification-service` | `8104` | Simula y persiste notificaciones |
-| `frontend` | `5180` | Panel tecnico React servido con Nginx y reverse proxy interno |
+| `control-panel` | `8105` | Panel web para monitorizar, operar y probar el sistema |
 | `data-seeder` | n/a | Genera y carga datos Faker automaticamente al arrancar |
 | `postgres` | `5434` | Base de datos principal |
 | `prometheus` | `9091` | Scraping de metricas |
@@ -43,7 +43,19 @@ Hay un helper multiplataforma en la raiz del repo:
 - **Windows (PowerShell):** `.\run.ps1 up`
 - **macOS / Linux:** `./run.sh up`
 
-Comandos disponibles: `up`, `build`, `down`, `reset`, `logs`, `ps`, `status` y `help`.
+Comandos disponibles: `up`, `k8s`, `stop`, `build`, `down`, `reset`, `logs`, `ps`, `status` y `help`.
+
+Para levantar el proyecto completo (incluyendo Kubernetes) y detenerlo de forma
+ordenada, los helpers delegan en `scripts/`:
+
+```bash
+./run.sh k8s     # minikube + imagenes + manifiestos + Compose + modo kubernetes
+./run.sh stop    # parada suave (SIGTERM) de Compose y minikube, sin borrar datos
+```
+
+Ambos scripts aceptan opciones (ver `--help`): `--compose-only`, `--k8s-only`,
+`--no-build`, `--reset` para `up`, y `--keep-cluster`, `--purge` para `down`.
+Detalle en [`docs/TOOLING.md`](docs/TOOLING.md#arranque-y-parada-asistidos).
 
 Equivalente directo con Docker Compose:
 
@@ -93,7 +105,6 @@ docker compose up --build -d
 
 ## URLs utiles
 
-- UI tecnica: `http://localhost:5180`
 - Swagger:
   - `http://localhost:8100/docs`
   - `http://localhost:8101/docs`
@@ -103,57 +114,95 @@ docker compose up --build -d
 - Prometheus: `http://localhost:9091`
 - Grafana: `http://localhost:3001`
 - Jaeger: `http://localhost:16687`
+- Panel de control: `http://localhost:8105`
 
 Credenciales de Grafana:
 
 - usuario: `admin`
 - contrasena: `admin`
 
-## Frontend tecnico
+## Panel de control (web)
 
-El stack ahora incluye `frontend`, una UI React + Vite + TypeScript servida por Nginx en `http://localhost:5180`.
+El stack incluye `control-panel`, un panel web en `http://localhost:8105` para
+monitorizar, operar y probar todo el sistema sin usar la terminal. Está
+organizado en pestañas:
 
-- No fue necesario agregar CORS a los microservicios.
-- El contenedor `frontend` hace reverse proxy interno a:
-  - `/api/user/* -> http://user-service:8000/*`
-  - `/api/inventory/* -> http://inventory-service:8000/*`
-  - `/api/order/* -> http://order-service:8000/*`
-  - `/api/payment/* -> http://payment-service:8000/*`
-  - `/api/notification/* -> http://notification-service:8000/*`
-  - `/api/prometheus/* -> http://prometheus:9090/*`
-- La UI muestra:
-  - estado de `user-service`, `inventory-service`, `order-service`, `payment-service`, `notification-service` y `data-seeder`
-  - conteos de usuarios, productos, ordenes, pagos y notificaciones
-  - **metricas en vivo desde Prometheus** (targets saludables, requests, errores 5xx, tasa de error y latencia media)
-  - tablas de usuarios recientes, ordenes recientes, pagos recientes y notificaciones recientes
-  - simulacion de orden contra `POST /orders`
-  - generacion de datos mock en demanda (`POST /users/generate` y `POST /inventory/generate`)
-  - controles de chaos engineering (`FAILURE_RATE`, `LATENCY_MS`, `TIMEOUT_RATE`)
-  - accesos rapidos a Prometheus, Grafana y Jaeger
+- **Inicio** — salud de los 5 servicios, conteos, circuit breaker, alertas y un
+  diagrama vertical del flujo de servicios en tiempo real (con latencia por
+  salto). Permite **detener/levantar cada servicio** de verdad y colocar órdenes
+  de prueba (con resaltado de la orden generada).
+- **Órdenes** — colocar orden, historial por usuario, listado con búsqueda y
+  paginación, edición (estado/prioridad) y borrado.
+- **Pruebas** — ráfagas masivas de pedidos configurables (por cliente, artículos
+  por pedido) y **simulación continua** de tráfico (iniciar/detener, con estado
+  en vivo) para ver el efecto en las métricas.
+- **Clientes / Inventario** — búsqueda por id/nombre/email, paginación, edición,
+  borrado y **generación de datos Faker ilimitada** (con cantidad).
+- **Pagos / Notificaciones** — búsqueda, listado paginado y borrado.
+- **Resiliencia** — inyección de fallos por servicio (en %, ms y %) y **global**,
+  reintentos en runtime, circuit breaker en vivo, presets de fallo y **escenarios
+  de prueba** con resultados.
+- **Observabilidad** — latencia p50/p95/p99, throughput y errores, recursos
+  CPU/RAM/disco, objetivos de Prometheus, alertas y Grafana embebido.
+- **Kubernetes** — pods y HPA del cluster (solo lectura, opcional).
 
-## Endpoints read-only para UI
+Cada pestaña con datos en vivo tiene su propio control de **auto-refresco**
+(intervalo en segundos, mínimo 1) y botón de actualización manual.
 
-Se agregaron endpoints de lectura para alimentar la UI sin tocar la logica transaccional:
+## Control por terminal
+
+Ademas del panel web, existe `cli.py` en la raiz del repo (Python estandar, sin
+dependencias nuevas) como control por terminal:
+
+```powershell
+python cli.py status
+python cli.py users generate
+python cli.py inventory generate
+python cli.py order place --user-id 1 --product-id 1 --quantity 1
+python cli.py chaos set order-service --failure-rate 0.2
+python cli.py chaos reset --all
+python cli.py circuit-breaker status
+python cli.py --help
+```
+
+Los comandos que alteran el estado compartido del stack (`chaos set`, `chaos reset`)
+piden confirmacion antes de ejecutarse; usa `--yes` para saltarla en scripts.
+
+## Endpoints read-only
+
+Se agregaron endpoints de lectura para consultar el estado sin tocar la logica transaccional:
 
 - `user-service`
+  - `GET /users` (paginado, `?offset/limit/search`)
   - `GET /users/count`
   - `GET /users/recent?limit=10`
 - `inventory-service`
-  - `GET /inventory?limit=10`
+  - `GET /inventory?limit=10` (con `?search=`)
   - `GET /inventory/stock?limit=10`
   - `GET /inventory/count`
 - `order-service`
+  - `GET /orders` (paginado, `?offset/limit/search`)
   - `GET /orders/recent?limit=10`
   - `GET /orders/count`
   - `GET /orders/{order_id}`
 - `payment-service`
+  - `GET /payments` (paginado, `?offset/limit/search`)
   - `GET /payments/recent?limit=10`
   - `GET /payments/count`
   - `GET /payments/by-order/{order_id}`
 - `notification-service`
+  - `GET /notifications` (paginado, `?offset/limit/search`)
   - `GET /notifications/recent?limit=10`
   - `GET /notifications/count`
   - `GET /notifications/by-order/{order_id}`
+
+Endpoints de operación/prueba añadidos para el panel:
+
+- `POST /users/faker?count=N` y `POST /inventory/faker?count=N` — datos Faker ilimitados.
+- `POST /orders/generate` — ráfaga masiva (`count`, `user_id`, `clients`, `orders_per_client`, `quantity`, `product_id`).
+- `POST /orders/simulate/start|stop` y `GET /orders/simulate/status` — simulación continua de tráfico.
+- `GET/POST /resilience/retries` — reintentos en runtime de `order-service`.
+- `GET /chaos/config` — estado actual del caos por servicio.
 
 ## Verificacion minima
 
@@ -208,16 +257,6 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8100/orders `
   -Body '{"user_id":1,"product_id":2,"quantity":1}'
 ```
 
-Validacion del frontend y del reverse proxy:
-
-```powershell
-curl.exe -s http://localhost:5180/api/user/users/count
-curl.exe -s "http://localhost:5180/api/user/users/recent?limit=3"
-curl.exe -s "http://localhost:5180/api/order/orders/recent?limit=3"
-curl.exe -s "http://localhost:5180/api/payment/payments/recent?limit=3"
-curl.exe -s "http://localhost:5180/api/notification/notifications/recent?limit=3"
-```
-
 Validacion puntual de los endpoints nuevos por servicio:
 
 ```powershell
@@ -252,8 +291,8 @@ Prometheus:
 
 Grafana:
 
-- El datasource `Prometheus` queda aprovisionado automaticamente con URL `http://prometheus:9090`.
-- Se incluye un dashboard base llamado `Resilencia Overview`.
+- El datasource `Prometheus` queda aprovisionado automaticamente con URL `http://prometheus:9090` (uid fijo: `prometheus`).
+- Dashboard `Resilencia Overview`: 12 paneles cubriendo los 4 sectores de la propuesta (Desempeno, Resiliencia, Recursos, Observabilidad). Ver `docs/RESULTS.md` para el analisis consolidado y capturas.
 
 Jaeger:
 
@@ -345,6 +384,76 @@ Para caos:
 - `with-retries.js` y `with-circuit-breaker.js` ya usan `FAILURE_RATE` en mayusculas.
 - Los scripts estan pensados para correr dentro de la red Docker, no contra `localhost` desde el contenedor.
 
+## Kubernetes (Fase 6+)
+
+El stack tambien corre en un cluster de Kubernetes (probado con minikube,
+driver Docker). Requiere `kubectl` (incluido con Docker Desktop en Windows) y
+`minikube` (`winget install -e --id Kubernetes.minikube`).
+
+La forma rapida (macOS/Linux) es `./run.sh k8s`, que automatiza todo lo de
+abajo. Los pasos manuales equivalentes son:
+
+```powershell
+minikube start --driver=docker
+minikube addons enable metrics-server
+foreach ($svc in "user-service","inventory-service","payment-service","notification-service","order-service") {
+  docker build -t "${svc}:latest" ".\services\$svc"
+  minikube image load "${svc}:latest"
+}
+kubectl apply -f k8s/base/
+kubectl apply -f k8s/resilience/hpa.yaml
+```
+
+Los 5 microservicios tienen liveness/readiness probes y **leader election** de
+fondo (Fase 4): una sola réplica por servicio tiene el "lease" de orquestación
+y sirve los endpoints guarded (`/orders`, `/simulate/*`, `/resilience/*`); si
+ese pod cae, otra réplica toma el liderazgo (prioridad: order=100, payment=80,
+inventory=60, user=40, notification=20). `order-service-hpa` y
+`payment-service-hpa` autoescalan (min 1 / max 5 replicas, 70% CPU). El panel
+de control expone acciones (escalar, borrar pod) y enruta el tráfico de
+orquestación **al pod líder** (no a un Service genérico), eliminando los 503 de
+"not the current orchestrator leader" con réplicas. Para usar
+`cli.py` contra el cluster en vez de Compose, ver "Targeting `cli.py` at the
+Kubernetes cluster" en `docs/TOOLING.md`. Resultados completos (HPA, MTTR,
+hallazgos) en `docs/tests/kubernetes-results.md` y `docs/tests/fault-*-results.md`.
+
+### Verificación E2E (Fase 5)
+
+Escenarios verificados contra el panel (`http://localhost:8105`, modo
+`kubernetes`):
+
+1. **Escalar ±** — `POST /api/kubernetes/scale {"deployment":"order-service","replicas":N}`; el panel refleja el cambio (el HPA sobreescribe en ~5 min si baja del mínimo).
+2. **Borrar pod / self-healing** — `DELETE /api/kubernetes/pod {"deployment":"order-service",...}`; el ReplicaSet lo recrea desde cero (probes readiness/liveness).
+3. **Carga + HPA** — `POST /api/orders/simulate/start {"rate":40,"clients":10}` → `order-service-hpa` escala 1→3 (70% CPU). Resultado observado: 625 órdenes enviadas, 605 éxito. Parar con `/api/orders/simulate/stop`.
+4. **Takeover del líder** — escalar `order-service` a 0 (con su HPA temporalmente eliminado; el autoscaler no permite min 0): liderazgo pasa a `payment-service` en ~1 lease y `/api/orders` + `/api/counts` siguen funcionando vía el nuevo líder. Al restaurar (`kubectl apply -f k8s/resilience/hpa.yaml` + scale a 1), el liderazgo regresa solo a `order-service`.
+
+### Replicación de datos PostgreSQL (Fase 6)
+
+La base de datos corre como **primario + réplica hot standby** (streaming
+replication nativa, imagen `postgres:16-alpine`, sin operador):
+
+- `k8s/base/postgres.yaml` — primario con PVC (`postgres-primary-pvc`), WAL
+  disponible (`wal_level=replica`, 5 senders), `hba_file` propio.
+- `k8s/base/postgres-replica.yaml` — réplica que arranca con `pg_basebackup`
+  del primario (`-R` → `standby.signal` + `primary_conninfo`) sobre su PVC.
+- `k8s/base/postgres-hba.yaml` — reglas de auth (app + `host replication
+  replicator`). El rol `replicator` se crea en `init.sql`.
+- Los 5 microservicios no cambian: siguen apuntando a `DATABASE_URL` =
+  `postgres:5432` (el Service hace de conmutador).
+
+**Failover (script):** `scripts/promote_postgres.sh` — `pg_promote()` en la
+réplica + re-apunta el Service a `app: postgres-replica`. Verificado en vivo:
+datos paridad primario/réplica (órdenes se propagan), matar el primario no
+pierde datos y la app sigue escribiendo en el nodo promovido. Health/paridad:
+`scripts/postgres_replication_status.sh`.
+
+Caveats (aceptados en lab de estudio): minikube es single-node → la
+replicación es **lógica** (los datos existen dos veces en el mismo nodo físico,
+no es una copia geográfica); no hay read/write splitting (todo sigue al
+primario); tras un failover el primario original queda desconectado (su
+Deployment queda a 0) — para recuperar redundancia, re-clonar un standby
+siguiendo al nuevo primario (recipe en `docs/TOOLING.md`).
+
 ## Configuracion de la base de datos
 
 Todos los microservicios y el seeder leen la variable `DATABASE_URL`. Por defecto apuntan al contenedor `postgres` de Compose:
@@ -366,4 +475,7 @@ El esquema (`db/init.sql`) usa tipos especificos de PostgreSQL (JSONB, enums y p
 - `docs/00. setup.md`
 - `docs/01.Arquitectura.md`
 - `docs/services/*.md`
-- `docs/tests/ejemplo.md`
+- `docs/tests/` — un resultado por fase/fault, mas capturas del dashboard en `docs/tests/screenshots/`
+- `docs/TOOLING.md` — how `cli.py`, chaos, circuit breaker, k6, JMeter and Kubernetes targeting work
+- `docs/ACTION-PLAN.md` — phased plan and progress (Fases 0-8 completadas)
+- `docs/RESULTS.md` — documento maestro: los 4 hallazgos esperados de la propuesta, consolidados

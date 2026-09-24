@@ -54,19 +54,19 @@ switch ($Command) {
         Show-Help
     }
     "up" {
-        Invoke-Compose @("up", "--build", "-d")
-        Write-Host "`nStack iniciado. Panel: http://localhost:5180"
+        Invoke-Compose @("up", "--build", "-d", "--remove-orphans")
+        Write-Host "`nStack iniciado."
     }
     "build" {
         Invoke-Compose @("build", "--no-cache")
     }
     "down" {
-        Invoke-Compose @("down")
+        Invoke-Compose @("down", "--remove-orphans")
     }
     "reset" {
-        Invoke-Compose @("down", "-v")
-        Invoke-Compose @("up", "--build", "-d")
-        Write-Host "`nStack reiniciado desde cero. Panel: http://localhost:5180"
+        Invoke-Compose @("down", "-v", "--remove-orphans")
+        Invoke-Compose @("up", "--build", "-d", "--remove-orphans")
+        Write-Host "`nStack reiniciado desde cero."
     }
     "logs" {
         Invoke-Compose @("logs", "-f")
@@ -79,7 +79,6 @@ switch ($Command) {
         Write-Host @"
 
 URLs utiles:
-  Panel:        http://localhost:5180
   Swagger:      http://localhost:8100/docs .. http://localhost:8104/docs
   Prometheus:   http://localhost:9091
   Grafana:      http://localhost:3001  (admin / admin)

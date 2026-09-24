@@ -1,0 +1,220 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 10s
+      evaluation_interval: 15s
+    rule_files:
+      - /etc/prometheus/alerts.yml
+    scrape_configs:
+      - job_name: otel-collector
+        static_configs:
+          - targets: ["otel-collector:8889"]
+      - job_name: microservices
+        static_configs:
+          - targets:
+              - "order-service:8000"
+              - "payment-service:8000"
+              - "notification-service:8000"
+              - "user-service:8000"
+              - "inventory-service:8000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alerts
+data:
+  alerts.yml: |
+{{ .Files.Get "files/alerts.yml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: { endpoint: 0.0.0.0:4317 }
+          http: { endpoint: 0.0.0.0:4318 }
+    processors:
+      batch:
+    exporters:
+      otlp/jaeger:
+        endpoint: jaeger:4317
+        tls: { insecure: true }
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        traces: { receivers: [otlp], processors: [batch], exporters: [otlp/jaeger, debug] }
+        metrics: { receivers: [otlp], processors: [batch], exporters: [prometheus, debug] }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource
+data:
+  prometheus.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+data:
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: Resilencia Dashboards
+        orgId: 1
+        folder: Resilencia
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 30
+        options: { path: /var/lib/grafana/dashboards }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-resilencia
+data:
+  resilencia-overview.json: |
+{{ .Files.Get "files/grafana-dashboard.json" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: otel-collector } }
+  template:
+    metadata: { labels: { app: otel-collector } }
+    spec:
+      containers:
+        - name: otel-collector
+          image: {{ .Values.observability.otelCollectorImage }}
+          ports: [{ containerPort: 4317 }, { containerPort: 4318 }, { containerPort: 8889 }]
+          volumeMounts:
+            - { name: otel-collector-config, mountPath: /etc/otelcol-contrib/config.yaml, subPath: config.yaml }
+      volumes:
+        - name: otel-collector-config
+          configMap: { name: otel-collector-config }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: otel-collector }
+spec:
+  selector: { app: otel-collector }
+  ports:
+    - { name: grpc, protocol: TCP, port: 4317, targetPort: 4317 }
+    - { name: http, protocol: TCP, port: 4318, targetPort: 4318 }
+    - { name: metrics, protocol: TCP, port: 8889, targetPort: 8889 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: prometheus } }
+  template:
+    metadata: { labels: { app: prometheus } }
+    spec:
+      containers:
+        - name: prometheus
+          image: {{ .Values.observability.prometheusImage }}
+          ports: [{ containerPort: 9090 }]
+          volumeMounts:
+            - { name: prometheus-config, mountPath: /etc/prometheus/prometheus.yml, subPath: prometheus.yml }
+            - { name: prometheus-alerts, mountPath: /etc/prometheus/alerts.yml, subPath: alerts.yml }
+      volumes:
+        - name: prometheus-config
+          configMap: { name: prometheus-config }
+        - name: prometheus-alerts
+          configMap: { name: prometheus-alerts }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prometheus }
+spec:
+  selector: { app: prometheus }
+  ports: [{ protocol: TCP, port: 9090, targetPort: 9090 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: grafana } }
+  template:
+    metadata: { labels: { app: grafana } }
+    spec:
+      containers:
+        - name: grafana
+          image: {{ .Values.observability.grafanaImage }}
+          env:
+            - { name: GF_SECURITY_ADMIN_PASSWORD, value: {{ .Values.observability.grafanaAdminPassword | quote }} }
+          ports: [{ containerPort: 3000 }]
+          volumeMounts:
+            - { name: datasource-provisioning, mountPath: /etc/grafana/provisioning/datasources }
+            - { name: dashboard-provider, mountPath: /etc/grafana/provisioning/dashboards }
+            - { name: dashboard-json, mountPath: /var/lib/grafana/dashboards }
+      volumes:
+        - name: datasource-provisioning
+          configMap: { name: grafana-datasource }
+        - name: dashboard-provider
+          configMap: { name: grafana-dashboard-provider }
+        - name: dashboard-json
+          configMap: { name: grafana-dashboard-resilencia }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: grafana }
+spec:
+  selector: { app: grafana }
+  ports: [{ protocol: TCP, port: 3000, targetPort: 3000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: jaeger } }
+  template:
+    metadata: { labels: { app: jaeger } }
+    spec:
+      containers:
+        - name: jaeger
+          image: {{ .Values.observability.jaegerImage }}
+          env:
+            - { name: COLLECTOR_OTLP_ENABLED, value: "true" }
+          ports: [{ containerPort: 16686 }, { containerPort: 14250 }, { containerPort: 4317 }, { containerPort: 4318 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: jaeger }
+spec:
+  selector: { app: jaeger }
+  ports:
+    - { name: ui, protocol: TCP, port: 16686, targetPort: 16686 }
+    - { name: grpc, protocol: TCP, port: 14250, targetPort: 14250 }
+    - { name: otlp-grpc, protocol: TCP, port: 4317, targetPort: 4317 }

@@ -1,0 +1,27 @@
+# Kubernetes equivalent of Compose's `data-seeder` one-shot service
+# (Phase 10) - populates the 50k-user Faker dataset that only exists via
+# Compose otherwise. Idempotent (only inserts missing users), matching
+# `services/data-seeder`'s own behavior - safe to re-run with `kubectl
+# apply -f` + `kubectl delete job/create job --from=job/data-seeder`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-seeder
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: data-seeder
+          image: data-seeder:latest
+          imagePullPolicy: Never
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://resilencia:resilencia_secret@postgres:5432/resilencia_db"
+            - name: SEED_ENABLED
+              value: "true"
+            - name: SEED_USERS_COUNT
+              value: "50000"
+            - name: SEED_PRODUCTS_COUNT
+              value: "0"

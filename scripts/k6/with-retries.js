@@ -7,6 +7,7 @@ const CHAOS_URL = __ENV.CHAOS_URL || 'http://payment-service:8000/chaos/config';
 export const options = {
   vus: 10,
   duration: '30s',
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
 export function setup() {
@@ -37,6 +38,10 @@ export default function () {
   const res = http.post(ORDER_URL, payload, params);
   check(res, {
     'status is 200 or 201': (r) => r.status === 200 || r.status === 201,
+    // order-service returns HTTP 200 even when the payment call failed
+    // (see scripts/k6/baseline.js) - this check is what actually shows the
+    // retries-vs-no-retries difference in error rate.
+    'order succeeded': (r) => r.json('status') === 'success',
   });
   sleep(1);
 }

@@ -12,11 +12,19 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Base, PaymentRecord, engine, get_db
+from database import Base, PaymentRecord, engine, get_db, AsyncSessionLocal
 from tracing import setup_tracing
+
+from shared.orchestrator import (
+    OrchestratorConfig,
+    build_router,
+    configure,
+    start_leader_loop,
+    stop_leader_loop,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +36,18 @@ ZERO_MONEY = Decimal("0.00")
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    configure(
+        OrchestratorConfig(
+            service_name="payment-service",
+            priority=int(os.getenv("ORCHESTRATOR_PRIORITY", "80")),
+            get_db=get_db,
+            session_factory=AsyncSessionLocal,
+        )
+    )
+    app.include_router(build_router())
+    await start_leader_loop()
     yield
+    await stop_leader_loop()
 
 
 app = FastAPI(title="payment-service", lifespan=lifespan)
@@ -354,6 +373,56 @@ async def recent_payments(
     return [serialize_payment_record(record) for record in records]
 
 
+@app.get("/payments", response_model=list[PaymentRecordSummary])
+async def list_payments(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
+    search: Optional[str] = Query(None, description="Busca por id de orden, estado o método"),
+    db: AsyncSession = Depends(get_db),
+) -> list[PaymentRecordSummary]:
+    await apply_chaos_latency_and_timeout()
+    stmt = select(PaymentRecord).order_by(PaymentRecord.id.asc())
+    if search:
+        q = f"%{search}%"
+        clauses = [
+            PaymentRecord.status.ilike(q),
+            PaymentRecord.method.ilike(q),
+        ]
+        if search.isdigit():
+            clauses.append(PaymentRecord.id == int(search))
+            clauses.append(PaymentRecord.order_id == int(search))
+        stmt = stmt.where(or_(*clauses))
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    records = result.scalars().all()
+    return [serialize_payment_record(record) for record in records]
+
+
+@app.delete("/payments")
+async def delete_all_payments(db: AsyncSession = Depends(get_db)) -> dict:
+    await apply_chaos_latency_and_timeout()
+    await db.execute(delete(PaymentRecord))
+    await db.commit()
+    return {"message": "All payments deleted successfully"}
+
+
+@app.delete("/payments/{payment_id}")
+async def delete_payment(
+    payment_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await apply_chaos_latency_and_timeout()
+    result = await db.execute(
+        select(PaymentRecord).where(PaymentRecord.id == payment_id)
+    )
+    record = result.scalars().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    await db.delete(record)
+    await db.commit()
+    return {"message": "Payment deleted successfully", "payment_id": payment_id}
+
+
 @app.get("/payments/by-order/{order_id}", response_model=PaymentRecordSummary)
 async def get_payment_by_order(
     order_id: int,
@@ -430,6 +499,15 @@ async def process_payment(
         payment=payment,
         fraud_check=fraud_result,
     )
+
+
+@app.get("/chaos/config")
+def get_chaos_config():
+    return {
+        "FAILURE_RATE": FAILURE_RATE,
+        "LATENCY_MS": LATENCY_MS,
+        "TIMEOUT_RATE": TIMEOUT_RATE,
+    }
 
 
 @app.post("/chaos/config")

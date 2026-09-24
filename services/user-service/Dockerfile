@@ -1,15 +1,20 @@
+# Base image used to package the service in a container.
+# Build context: repo root's services/ directory (so the shared orchestrator
+# module is copied alongside the service):
+#   docker build -t user-service:latest -f services/user-service/Dockerfile services
 FROM python:3.12-slim
 
 # Defines the working directory inside the container for running the service.
 WORKDIR /app
 
 # Copies dependencies first to take advantage of the Docker layer cache.
-COPY requirements.txt .
+COPY user-service/requirements.txt .
 # Installs only the libraries needed for this microservice.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copies the service code into the container.
-COPY . .
+# Copies the service code and the shared orchestrator module into the container.
+COPY user-service/ ./
+COPY shared/ /app/shared/
 
 # Exposes the port used by Uvicorn inside the container.
 EXPOSE 8000

@@ -1,0 +1,17 @@
+# DEV-ONLY local cluster credentials/rules (same spirit as deployment.yaml).
+# hba_file override shared by the primary and the streaming replica so that
+# pg_basebackup can authenticate as `replicator` over host replication.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-hba
+data:
+  pg_hba.conf: |
+    # Peer/trust for the entrypoint's local socket operations (initdb, init.sql).
+    local   all             all                                     trust
+    # Application connections (the 5 microservices) and diagnostics.
+    host    all             all             0.0.0.0/0               scram-sha-256
+    host    all             all             ::/0                    scram-sha-256
+    # Streaming replication for the hot-standby replica + pg_basebackup.
+    host    replication     replicator      0.0.0.0/0               scram-sha-256
+    host    replication     replicator      ::/0                    scram-sha-256
