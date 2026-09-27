@@ -630,6 +630,10 @@ def disk():
 
 @app.get("/api/kubernetes")
 async def kubernetes_status(namespace: str = "default"):
+    """Aggregate cluster state for the Kubernetes tab: version, Deployments
+    (with their HPA if any), and Pods, all fetched in parallel. Also appends
+    one replica-count sample per Deployment to _K8S_HISTORY for the
+    auto-scaling chart."""
     if not K8S_API_SERVER:
         raise HTTPException(status_code=503, detail="Kubernetes not configured")
     # verify=False: the cluster cert is issued for the minikube hostname/IP,

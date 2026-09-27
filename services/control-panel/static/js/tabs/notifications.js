@@ -1,3 +1,4 @@
+// EN: Notifications tab — search, list, and delete.
 // notifications.js — Notificaciones: búsqueda, listado y borrado.
 
 import { mountEntity } from '../entity.js';

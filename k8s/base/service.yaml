@@ -1,3 +1,6 @@
+# ClusterIP Services exposing the database, the microservices and the
+# observability stack (otel-collector, prometheus, grafana, jaeger) inside
+# the cluster, matching the Deployments/pods defined in deployment.yaml.
 apiVersion: v1
 kind: Service
 metadata:

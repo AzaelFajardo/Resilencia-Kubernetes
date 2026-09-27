@@ -1,3 +1,5 @@
+# control-panel: FastAPI backend + static SPA, monitoring and administering the stack.
+# Build context: this service's own directory (services/control-panel).
 FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .

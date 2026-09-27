@@ -1,3 +1,7 @@
+"""notification-service: simulates delivering order notifications across
+channels (email/SMS/push/in-app), persists the delivery outcome, and supports
+chaos-injection (latency/timeout/failure) for resilience testing."""
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import asyncio
@@ -31,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Creates tables on startup and registers this service with the shared
+    orchestrator (leader election) for the duration of the app's lifetime."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     configure(
@@ -51,6 +57,7 @@ app = FastAPI(title="notification-service", lifespan=lifespan)
 setup_tracing(app, "notification-service")
 Instrumentator().instrument(app).expose(app)
 
+# Chaos-injection knobs, mutable at runtime via /chaos/config for resilience testing.
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
 TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
@@ -58,11 +65,15 @@ USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
 
 
 class IpGeolocation(BaseModel):
+    """Nested geolocation derived from the client IP address."""
+
     city: str
     country: str
 
 
 class SecurityContext(BaseModel):
+    """Security and risk-assessment fields attached to every notification response."""
+
     fraud_score: int
     session_id: str
     device_fingerprint: str
@@ -75,6 +86,8 @@ class SecurityContext(BaseModel):
 
 
 class RequestMetadata(BaseModel):
+    """Request metadata and tracing fields attached to every notification response."""
+
     trace_id: str
     request_id: str
     source_system: str
@@ -88,6 +101,8 @@ class RequestMetadata(BaseModel):
 
 
 class NotificationDetails(BaseModel):
+    """Simulated notification configuration/tracking fields for the chosen channel."""
+
     enable_email: bool
     enable_sms: bool
     enable_push: bool
@@ -101,6 +116,9 @@ class NotificationDetails(BaseModel):
 
 
 class NotificationRequest(BaseModel):
+    """Incoming notification request; extra fields are accepted (not validated)
+    so upstream callers can pass additional context without breaking this schema."""
+
     order_id: int
     amount: float
     user_id: int
@@ -121,11 +139,15 @@ class ChaosConfig(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Confirms that the service is up and available."""
+
     status: str
     service: str
 
 
 class NotificationResponse(BaseModel):
+    """Full response envelope: metadata, security context, notification config, and delivery result."""
+
     metadata: RequestMetadata
     security: SecurityContext
     status: str
@@ -149,6 +171,7 @@ class NotificationRecordSummary(BaseModel):
 
 
 def build_metadata(request: Request) -> RequestMetadata:
+    """Generates request metadata/tracing fields from the incoming request."""
     return RequestMetadata(
         trace_id=str(uuid.uuid4()),
         request_id=str(uuid.uuid4()),
@@ -164,6 +187,7 @@ def build_metadata(request: Request) -> RequestMetadata:
 
 
 def build_security(request: Request) -> SecurityContext:
+    """Generates a simulated security context for the notification response."""
     return SecurityContext(
         fraud_score=0,
         session_id=str(uuid.uuid4()),
@@ -178,6 +202,8 @@ def build_security(request: Request) -> SecurityContext:
 
 
 async def apply_chaos_latency_and_timeout():
+    """Injects configured artificial latency and, probabilistically, a long
+    stall (simulated timeout) before the request is handled."""
     if LATENCY_MS > 0:
         await asyncio.sleep(LATENCY_MS / 1000.0)
 
@@ -186,10 +212,14 @@ async def apply_chaos_latency_and_timeout():
 
 
 def should_simulate_failure() -> bool:
+    """Rolls the dice for a chaos-injected delivery failure based on FAILURE_RATE."""
     return FAILURE_RATE > 0 and random.random() < FAILURE_RATE
 
 
 async def fetch_customer_context(user_id: int) -> dict:
+    """Fetches customer context from user-service. Best-effort: any failure
+    (timeout, non-200, network error) degrades to an empty dict rather than
+    failing the notification."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{USER_SERVICE_URL}/users/{user_id}", timeout=2.0)
@@ -203,6 +233,8 @@ async def fetch_customer_context(user_id: int) -> dict:
 
 
 def build_notification_details(preferred_channel: Optional[str], customer_data: dict) -> NotificationDetails:
+    """Builds the notification configuration for the chosen channel (defaulting
+    to email) and attaches a VIP referral code when applicable."""
     channel = preferred_channel or "email"
     template_id = {
         "email": "TPL-CONF-01",
@@ -234,6 +266,8 @@ def simulate_delivery(
     language: str,
     gift_message: Optional[str],
 ) -> dict:
+    """Simulates rendering and dispatching the notification through a
+    channel-specific provider, without making any real external call."""
     provider_map = {
         "email": "SendGrid",
         "sms": "Twilio",
@@ -261,6 +295,8 @@ async def persist_notification(
     notification: NotificationDetails,
     status: str,
 ):
+    """Persists a notification attempt (sent or failed) as a new row; `sent_at`
+    is only populated when the delivery actually succeeded."""
     sent_at = datetime.now(timezone.utc) if status == "sent" else None
     record = NotificationRecord(
         order_id=req.order_id,
@@ -284,6 +320,7 @@ async def persist_notification(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    """Health endpoint for Kubernetes probes or basic checks."""
     return HealthResponse(status="ok", service="notification-service")
 
 
@@ -293,12 +330,16 @@ async def send_notification(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> NotificationResponse:
+    """Sends (simulated) a notification for an order: resolves customer
+    context, builds and "delivers" the notification, then persists the
+    outcome regardless of whether delivery succeeded or was chaos-failed."""
     await apply_chaos_latency_and_timeout()
 
     metadata = build_metadata(request)
     security = build_security(request)
     customer_data = req.customer or {}
 
+    # Prefer caller-supplied customer data; only call out to user-service if absent.
     if not customer_data:
         customer_data = await fetch_customer_context(req.user_id)
 
@@ -339,12 +380,14 @@ async def send_notification(
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    """Formats a datetime as UTC ISO-8601 with a trailing 'Z', or None if unset."""
     if value is None:
         return None
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def serialize_notification_record(record: NotificationRecord) -> NotificationRecordSummary:
+    """Converts a persisted NotificationRecord row into its API summary representation."""
     return NotificationRecordSummary(
         id=int(record.id),
         order_id=int(record.order_id),
@@ -358,6 +401,7 @@ def serialize_notification_record(record: NotificationRecord) -> NotificationRec
 
 @app.get("/notifications/count", response_model=CountResponse)
 async def count_notifications(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    """Returns the total number of persisted notification records."""
     await apply_chaos_latency_and_timeout()
     total = await db.scalar(select(func.count()).select_from(NotificationRecord))
     return CountResponse(count=int(total or 0))
@@ -368,6 +412,7 @@ async def recent_notifications(
     limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationRecordSummary]:
+    """Returns the most recently created notifications, newest first."""
     await apply_chaos_latency_and_timeout()
     result = await db.execute(
         select(NotificationRecord)
@@ -383,6 +428,7 @@ async def get_notification_by_order(
     order_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> NotificationRecordSummary:
+    """Returns the most recent notification for a given order id."""
     await apply_chaos_latency_and_timeout()
     result = await db.execute(
         select(NotificationRecord)
@@ -403,6 +449,8 @@ async def list_notifications(
     search: Optional[str] = Query(None, description="Busca por id de orden/usuario, estado o canal"),
     db: AsyncSession = Depends(get_db),
 ) -> list[NotificationRecordSummary]:
+    """Lists notifications with pagination and an optional free-text search
+    across id, order id, user id, status, and channel."""
     await apply_chaos_latency_and_timeout()
     stmt = select(NotificationRecord).order_by(NotificationRecord.id)
     if search:
@@ -424,6 +472,7 @@ async def list_notifications(
 
 @app.delete("/notifications")
 async def delete_all_notifications(db: AsyncSession = Depends(get_db)) -> dict:
+    """Deletes ALL notification records."""
     await apply_chaos_latency_and_timeout()
     await db.execute(delete(NotificationRecord))
     await db.commit()
@@ -435,6 +484,7 @@ async def delete_notification(
     notification_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """Deletes a single notification by id."""
     await apply_chaos_latency_and_timeout()
     result = await db.execute(
         select(NotificationRecord).where(NotificationRecord.id == notification_id)
@@ -449,6 +499,7 @@ async def delete_notification(
 
 @app.get("/chaos/config")
 def get_chaos_config():
+    """Returns the current chaos-injection configuration."""
     return {
         "FAILURE_RATE": FAILURE_RATE,
         "LATENCY_MS": LATENCY_MS,
@@ -458,6 +509,8 @@ def get_chaos_config():
 
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
+    """Updates chaos-injection settings at runtime; only fields present in the
+    request body are changed, others keep their current value."""
     global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
 
     if config.FAILURE_RATE is not None:

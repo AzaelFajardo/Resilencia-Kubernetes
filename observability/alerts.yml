@@ -1,3 +1,5 @@
+# Prometheus alerting rules for service health, the circuit breaker state,
+# and order-service latency/error rate.
 groups:
   - name: resilencia-alerts
     rules:

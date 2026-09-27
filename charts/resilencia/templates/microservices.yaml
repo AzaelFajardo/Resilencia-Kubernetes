@@ -1,3 +1,5 @@
+# Deployment + Service pair for each downstream microservice listed in
+# values.yaml (order-service is templated separately, see order-service.yaml).
 {{- range .Values.microservices }}
 apiVersion: apps/v1
 kind: Deployment

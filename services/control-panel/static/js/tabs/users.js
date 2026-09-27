@@ -1,3 +1,4 @@
+// EN: Customers tab — search, list, Faker generation, and editing.
 // users.js — Clientes: búsqueda, listado, fakers y edición.
 
 import { mountEntity } from '../entity.js';

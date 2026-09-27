@@ -27,12 +27,19 @@ Faker.seed(42)
 
 
 def to_utc_iso(dt: datetime | None) -> str | None:
+    """Format a datetime as UTC ISO-8601 (Z suffix), matching the services' JSON convention."""
     if dt is None:
         return None
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def gen_customer(user_id: int) -> dict:
+    """Generate one synthetic user record matching the users table schema.
+
+    Only ~30% of records get a name suffix, and Faker occasionally returns an
+    empty/whitespace suffix - both are normalized to None. ~85% of users have
+    logged in at least once, always after their account was created.
+    """
     account_created_at = fake.date_time_between(start_date="-3y", end_date="-30d")
     last_login_at = None
     suffix = fake.suffix() if fake.boolean(chance_of_getting_true=30) else None
@@ -71,6 +78,7 @@ def gen_customer(user_id: int) -> dict:
 
 
 def gen_product(product_id: int) -> dict:
+    """Generate one synthetic product record matching the products table schema."""
     categories = [
         "electronics",
         "clothing",
@@ -128,7 +136,7 @@ def gen_product(product_id: int) -> dict:
         "currency": "MXN",
         "manufacturer": fake.company(),
         "ean13": fake.ean13(),
-        "stock_at_ordering": quantity,
+        "stock_at_ordering": quantity,  # snapshot of initial stock; the "quantity" column can change afterwards
         "estimated_restock_date": (
             fake.future_date(end_date="+120d").isoformat()
             if fake.boolean(chance_of_getting_true=70)
@@ -143,16 +151,19 @@ def gen_product(product_id: int) -> dict:
 
 
 def iter_user_records(count: int, start_id: int):
+    """Lazily yield `count` generated user records starting at `start_id`."""
     for user_id in range(start_id, start_id + count):
         yield gen_customer(user_id)
 
 
 def iter_product_records(count: int, start_id: int):
+    """Lazily yield `count` generated product records starting at `start_id`."""
     for product_id in range(start_id, start_id + count):
         yield gen_product(product_id)
 
 
 def gen_entity_records(entity: str, count: int, start_id: int):
+    """Materialize generated records for the given entity (or both, for "all")."""
     if entity == "users":
         return list(iter_user_records(count, start_id))
     if entity == "products":
@@ -166,11 +177,13 @@ def gen_entity_records(entity: str, count: int, start_id: int):
 
 
 def gen_users_sql(count: int, start_id: int) -> list[str]:
+    """Build INSERT statements for generated users, storing each record as JSONB."""
     lines = [
         "-- Users",
         "",
     ]
     for record in iter_user_records(count, start_id):
+        # Escape single quotes for safe embedding in a SQL string literal.
         payload = json.dumps(record, ensure_ascii=False).replace("'", "''")
         lines.append(f"INSERT INTO users (id, data) VALUES ({record['id']}, '{payload}'::jsonb);")
     lines.append("")
@@ -179,6 +192,7 @@ def gen_users_sql(count: int, start_id: int) -> list[str]:
 
 
 def gen_products_sql(count: int, start_id: int) -> list[str]:
+    """Build INSERT statements for generated products, storing each record as JSONB."""
     lines = [
         "-- Products",
         "",
@@ -195,6 +209,7 @@ def gen_products_sql(count: int, start_id: int) -> list[str]:
 
 
 def gen_sql(entity: str, count: int, start_id: int) -> str:
+    """Render the full SQL script (header + per-entity INSERTs) for --format sql."""
     lines = [
         "-- =============================================================",
         f"-- Generated entity set: {entity}",
@@ -215,6 +230,7 @@ def gen_sql(entity: str, count: int, start_id: int) -> str:
 
 
 def count_fields(obj) -> int:
+    """Recursively count leaf (non-dict/list) fields, for the --dry-run summary."""
     total = 0
     if isinstance(obj, dict):
         for value in obj.values():
@@ -229,6 +245,7 @@ def count_fields(obj) -> int:
 
 
 def build_dry_run_sample(entity: str, start_id: int):
+    """Build a single sample record (or one per entity, for "all") for --dry-run."""
     if entity == "users":
         return next(iter_user_records(1, start_id))
     if entity == "products":
@@ -242,6 +259,7 @@ def build_dry_run_sample(entity: str, start_id: int):
 
 
 def main():
+    """CLI entry point: parse arguments and dispatch to dry-run/json/sql output."""
     parser = argparse.ArgumentParser(
         description="Generate realistic Faker-based test data compatible with the repo schema."
     )

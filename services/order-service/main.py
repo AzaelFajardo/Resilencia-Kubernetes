@@ -1,3 +1,11 @@
+"""order-service - thin FastAPI shell around the shared order-orchestration
+module.
+
+Owns DB wiring, tracing setup, and health/chaos endpoints; the actual
+order-creation/orchestration logic lives in shared/orchestrator.py and is
+mounted here via build_router().
+"""
+
 from contextlib import asynccontextmanager
 import os
 from typing import Optional
@@ -22,11 +30,13 @@ from shared.orchestrator import (
 
 
 class HealthResponse(BaseModel):
+    """Confirms that the service is up and available."""
     status: str
     service: str
 
 
 class ChaosConfig(BaseModel):
+    """Partial chaos-injection override; unset fields leave current values untouched."""
     FAILURE_RATE: Optional[float] = None
     LATENCY_MS: Optional[int] = None
     TIMEOUT_RATE: Optional[float] = None
@@ -34,6 +44,8 @@ class ChaosConfig(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Creates tables, registers this service with the shared orchestrator,
+    mounts its router, and runs the leader-election loop for the app's lifetime."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     configure(
@@ -57,6 +69,7 @@ Instrumentator().instrument(app).expose(app)
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    """Health endpoint for Kubernetes probes or basic checks."""
     return HealthResponse(status="ok", service="order-service")
 
 
@@ -65,11 +78,13 @@ def health() -> HealthResponse:
 # keeps working exactly as before after the Phase 4 module extraction.
 @app.get("/chaos/config")
 def get_chaos_config():
+    """Returns the shared orchestrator's live chaos-injection settings."""
     return get_orchestrator_chaos()
 
 
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
+    """Applies partial chaos-config overrides to the shared orchestrator."""
     return set_orchestrator_chaos(
         OrchestratorChaosConfig(**config.model_dump(exclude_none=True))
     )

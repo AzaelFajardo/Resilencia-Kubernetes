@@ -1,3 +1,5 @@
+# data-seeder: one-shot job that loads Faker-generated users/products on startup.
+# Build context: repo root (so it can copy scripts/ alongside its own requirements.txt).
 FROM python:3.12-slim
 
 WORKDIR /app

@@ -1,3 +1,4 @@
+// EN: Kubernetes tab — pods, HPA, namespace selection, pod deletion, and live autoscaling.
 // kubernetes.js — Kubernetes: pods, HPA, namespace, borrar pod y autoescalado en vivo.
 
 import { API } from '../api.js';

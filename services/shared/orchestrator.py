@@ -76,6 +76,7 @@ class OrderStatus(str, Enum):
 
 
 class Order(SharedBase):
+    """Mutable order record; the single source of truth read/written throughout the saga in `_process_order`."""
     __tablename__ = "orders"
     __table_args__ = {"extend_existing": True}
 
@@ -133,6 +134,7 @@ _SESSION_FACTORY: Optional[Callable] = None
 
 @dataclass
 class OrchestratorConfig:
+    """Wiring passed by each service's main.py: this service's identity/priority plus its DB session factory for leader election."""
     service_name: str
     priority: int = 0
     get_db: Optional[Callable] = None
@@ -140,6 +142,7 @@ class OrchestratorConfig:
 
 
 def configure(cfg: OrchestratorConfig) -> None:
+    """Called once at service startup, before the router is mounted, to wire shared globals and (re)initialize leader election."""
     global SERVICE_NAME, PRIORITY, _SESSION_FACTORY
     SERVICE_NAME = cfg.service_name
     PRIORITY = int(cfg.priority or 0)
@@ -186,6 +189,7 @@ class IpGeolocation(BaseModel):
 
 
 class SecurityContext(BaseModel):
+    """Simulated security/fraud signals attached to a request; values are synthesized in build_security(), not produced by a real auth/fraud pipeline."""
     fraud_score: int
     session_id: str
     device_fingerprint: str
@@ -198,6 +202,7 @@ class SecurityContext(BaseModel):
 
 
 class RequestMetadata(BaseModel):
+    """Synthetic request/tracing metadata generated per call for observability demos; not parsed from real upstream headers."""
     trace_id: str
     request_id: str
     source_system: str
@@ -211,6 +216,7 @@ class RequestMetadata(BaseModel):
 
 
 class OrderDetails(BaseModel):
+    """Fulfillment-facing view of an order; mirrors the Order ORM model's non-identity columns for API responses."""
     id: Optional[int]
     internal_status: str
     priority: str
@@ -230,6 +236,7 @@ class OrderRequest(BaseModel):
 
 
 class OrderGenerateRequest(BaseModel):
+    """Bulk order-generation request; `clients`/`orders_per_client` and `user_id`/`count` are alternative ways to size the batch (see generate_orders)."""
     count: int = 1
     user_id: Optional[int] = None
     clients: Optional[int] = None
@@ -268,6 +275,7 @@ class ChaosConfig(BaseModel):
 
 
 class OrderResponse(BaseModel):
+    """Full trace of one order attempt: downstream payloads, per-hop timings, and (via `attempts`) retry counts for each hop."""
     metadata: RequestMetadata
     security: SecurityContext
     status: str
@@ -288,8 +296,8 @@ class OrderRecordSummary(BaseModel):
     product_id: int
     quantity: int
     total_price: float
-    status: str
-    internal_status: str
+    status: str  # coarse OrderStatus enum value (pending/confirmed/paid/...)
+    internal_status: str  # fine-grained saga step, e.g. "payment_verified" or "completed_notification_failed"
     priority: str
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -316,6 +324,7 @@ class CircuitBreakerError(Exception):
 
 
 class DownstreamServiceError(Exception):
+    """Raised by the payment/notification retry loops to carry the last downstream response payload alongside the error message."""
     def __init__(self, message: str, payload: Optional[dict] = None):
         super().__init__(message)
         self.payload = payload or {}
@@ -329,6 +338,7 @@ cb_state_gauge = Gauge(
 
 
 class AsyncCircuitBreaker:
+    """Standard CLOSED/OPEN/HALF_OPEN breaker guarding one downstream call; only one HALF_OPEN probe is allowed through at a time (see `is_probe` in `call`)."""
     def __init__(self, service_name: str, failure_threshold: int = 3, recovery_timeout: float = 10.0):
         self.service_name = service_name
         self.enabled = True
@@ -372,12 +382,14 @@ class AsyncCircuitBreaker:
         async with self._lock:
             if self.state == CircuitBreakerState.OPEN:
                 if time.time() - self.last_failure_time > self.recovery_timeout:
+                    # Recovery window elapsed: let exactly this caller through as the probe.
                     self.state = CircuitBreakerState.HALF_OPEN
                     is_probe = True
                     self._update_metric()
                 else:
                     raise CircuitBreakerError("Circuit is OPEN")
             elif self.state == CircuitBreakerState.HALF_OPEN:
+                # A probe is already in flight; reject concurrent callers until it resolves.
                 raise CircuitBreakerError("Circuit is OPEN")
 
         try:
@@ -387,12 +399,14 @@ class AsyncCircuitBreaker:
                 self.failures += 1
                 self.last_failure_time = time.time()
                 if is_probe or self.failures >= self.failure_threshold:
+                    # A failed probe re-opens immediately, regardless of failure_threshold.
                     self.state = CircuitBreakerState.OPEN
                 self._update_metric()
             raise exc
 
         async with self._lock:
             if is_probe or self.state == CircuitBreakerState.HALF_OPEN:
+                # A successful probe fully resets the breaker.
                 self.state = CircuitBreakerState.CLOSED
                 self.failures = 0
             elif self.state == CircuitBreakerState.CLOSED:
@@ -450,6 +464,8 @@ def resolve_url(url: str) -> tuple[str, dict]:
                 # for the resolver timeout on a stopped container.
                 _FAILED_RESOLVE[hostname] = time.time()
 
+        # Unresolved host: point at a closed local port so the connection fails
+        # fast instead of hanging on a repeated DNS lookup against a dead container.
         target_ip = cached_ip or "127.0.0.1"
         target_port = port if cached_ip else 1
 
@@ -473,6 +489,7 @@ async def call_service(
     json_data: Optional[dict] = None,
     track: Optional[list] = None,
 ) -> httpx.Response:
+    """Retries on network errors and 5xx responses only (never on 4xx); a single attempt is made when RETRY_ENABLED is False regardless of `retries`."""
     last_error = None
     attempts = (max(retries, 0) + 1) if RETRY_ENABLED else 1
     target_url, headers = resolve_url(url)
@@ -506,6 +523,7 @@ async def call_service(
 # ---------------------------------------------------------------------------
 
 def build_metadata(request: Optional[Request]) -> RequestMetadata:
+    """Synthesizes RequestMetadata; only client_ip/user_agent come from a real request (None for simulator/generator-originated orders)."""
     client_ip = "0.0.0.0"
     user_agent = "unknown"
     if request is not None:
@@ -526,6 +544,7 @@ def build_metadata(request: Optional[Request]) -> RequestMetadata:
 
 
 def build_security(request: Optional[Request]) -> SecurityContext:
+    """Synthesizes a fixed, low-risk SecurityContext; `request` is kept for API symmetry but not inspected."""
     return SecurityContext(
         fraud_score=15,
         session_id=str(uuid.uuid4()),
@@ -540,6 +559,7 @@ def build_security(request: Optional[Request]) -> SecurityContext:
 
 
 def build_placeholder_order(internal_status: str, priority: str = "none") -> OrderDetails:
+    """Fills an OrderDetails stand-in when a real order failed before it could be built or persisted."""
     return OrderDetails(
         id=None,
         internal_status=internal_status,
@@ -555,6 +575,7 @@ def build_placeholder_order(internal_status: str, priority: str = "none") -> Ord
 
 
 def build_order_details(order_id: Optional[int], inv_data: dict, security: SecurityContext) -> OrderDetails:
+    """Derives fulfillment details (carrier level, ETA, special instructions) from the inventory item snapshot and fraud score."""
     item = inv_data.get("item", {})
     dimensions = item.get("dimensions", {})
     weight_kg = item.get("weight_kg", 0)
@@ -591,7 +612,7 @@ async def apply_chaos_latency_and_timeout():
         await asyncio.sleep(LATENCY_MS / 1000.0)
 
     if TIMEOUT_RATE > 0 and random.random() < TIMEOUT_RATE:
-        await asyncio.sleep(30)
+        await asyncio.sleep(30)  # simulate a hang well past any client timeout, rather than a fixed error
 
 
 def should_simulate_failure() -> bool:
@@ -633,6 +654,7 @@ def sync_db_order(
     total_price: Decimal,
     status: OrderStatus,
 ):
+    """Copies the in-memory OrderDetails/status onto the ORM row; called repeatedly as the saga progresses so each intermediate state gets persisted."""
     db_order.user_id = req.user_id
     db_order.product_id = req.product_id
     db_order.quantity = req.quantity
@@ -657,6 +679,7 @@ async def release_inventory(
     product_id: int,
     quantity: int,
 ) -> Optional[str]:
+    """Compensating action for the reserve-inventory step; invoked whenever payment or a post-reservation persistence step fails."""
     try:
         response = await call_service(
             client,
@@ -682,6 +705,7 @@ async def persist_order_state(
     total_price: Decimal,
     status: OrderStatus,
 ):
+    """Commits one saga checkpoint; callers wrap this in try/except since a failed commit here still needs an OrderResponse returned, not raised."""
     sync_db_order(db_order, req, order, total_price, status)
     await db.commit()
     await db.refresh(db_order)
@@ -697,6 +721,14 @@ async def _process_order(
     db: AsyncSession,
     hop_attempts: Optional[dict] = None,
 ) -> OrderResponse:
+    """
+    Runs the order saga: validate user -> check/reserve inventory -> charge
+    payment -> notify. Failures are returned as OrderResponse(status=
+    "error"/"held"/"warning"), never raised, so every caller (API endpoint,
+    batch generator, load simulator) gets a uniform result. A failed payment
+    or a persistence error after reservation triggers release_inventory() as
+    a compensating action.
+    """
     if hop_attempts is None:
         hop_attempts = {}
     await apply_chaos_latency_and_timeout()
@@ -1180,6 +1212,7 @@ async def _process_order(
 # ---------------------------------------------------------------------------
 
 class SimulatorState:
+    """In-memory, per-process state for the background load generator; not persisted and reset on restart."""
     def __init__(self):
         self.running = False
         self.task: Optional[asyncio.Task] = None
@@ -1199,6 +1232,7 @@ async def _simulate_worker(
     product_ids: list[int],
     duration: Optional[int],
 ):
+    """Background task: submits random orders at ~`rate` per second (jittered) until stopped or `duration` elapses."""
     started = time.time()
     while simulator.running:
         if duration is not None and (time.time() - started) >= duration:
@@ -1232,6 +1266,11 @@ _ELECTION_TABLE = "service_leader"
 
 
 class LeaderElection:
+    """
+    In-memory view of this process's leader-election status, refreshed on
+    every heartbeat by `_heartbeat()`. When `enabled` is False (non-Kubernetes
+    runs) `is_leader` is pinned True and the DB table is never touched.
+    """
     def __init__(self, service_name: str, priority: int, heartbeat_seconds: float = 3.0, lease_seconds: float = 12.0):
         self.service_name = service_name
         self.priority = int(priority or 0)
@@ -1285,6 +1324,8 @@ def configure_election(cfg: OrchestratorConfig) -> None:
 
 
 async def _ensure_leader_table(conn) -> None:
+    # Idempotent (CREATE ... IF NOT EXISTS): called on every heartbeat so a
+    # service can start electing before any migration has created the table.
     await conn.execute(text(
         f"CREATE TABLE IF NOT EXISTS {_ELECTION_TABLE} ("
         "service_name VARCHAR(50) PRIMARY KEY,"
@@ -1298,6 +1339,12 @@ async def _ensure_leader_table(conn) -> None:
 
 
 async def _heartbeat() -> None:
+    """
+    Renews this node's lease row, then recomputes the current leader from all
+    rows' freshness. The UPSERT's WHERE clause only lets the row's current
+    owner (matching node_id) or an already-expired lease be overwritten, so a
+    losing candidate can never clobber another node's still-valid lease.
+    """
     st = ELECTION
     now = datetime.now(timezone.utc)
     lease_expires = now + timedelta(seconds=st.lease_seconds)
@@ -1344,6 +1391,8 @@ async def _heartbeat() -> None:
         if r.heard_at is not None and (now - r.heard_at).total_seconds() <= st.lease_seconds
     ]
     if alive:
+        # Highest priority wins; ties are broken deterministically by node_id
+        # string ordering (arbitrary but stable across all replicas' views).
         winner = min(alive, key=lambda r: (-int(r.priority), str(r.node_id)))
         st.current_leader_service = winner.service_name
         st.is_leader = st.enabled and str(winner.node_id) == st.node_id
@@ -1362,6 +1411,8 @@ async def _leader_loop() -> None:
         try:
             await _heartbeat()
         except Exception:
+            # Swallow and keep looping: one bad cycle (e.g. a transient DB
+            # outage) must not stop future lease renewals.
             logger.exception("leader election heartbeat failed for %s", ELECTION.service_name)
         await asyncio.sleep(ELECTION.heartbeat_seconds)
 
@@ -1397,6 +1448,13 @@ async def _db_dependency():
 
 
 def _ensure_leader() -> None:
+    """
+    Gate used by every orchestrator endpoint below: only the elected leader
+    serves the request. A non-leader answers 503 naming the current leader,
+    so callers can redirect instead of failing silently (pattern applied via
+    the `_ensure_leader()` call at the top of each endpoint; not repeated in
+    every endpoint's own docstring).
+    """
     if not ELECTION.enabled:
         return
     if ELECTION.is_leader:
@@ -1494,8 +1552,8 @@ async def list_orders(
             Order.internal_status.ilike(q),
         ]
         if search.isdigit():
-            clauses.append(Order.id == int(search))
-            clauses.append(Order.user_id == int(search))
+            clauses.append(Order.id == int(search))  # numeric search matches by id...
+            clauses.append(Order.user_id == int(search))  # ...or by user_id
         stmt = stmt.where(or_(*clauses))
     stmt = stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
@@ -1578,8 +1636,8 @@ async def create_order(
     hop_attempts: dict = {}
     result = await _process_order(req, request, db, hop_attempts)
     if hasattr(result, "model_copy"):
-        return result.model_copy(update={"attempts": hop_attempts})
-    return result.copy(update={"attempts": hop_attempts})
+        return result.model_copy(update={"attempts": hop_attempts})  # Pydantic v2
+    return result.copy(update={"attempts": hop_attempts})  # Pydantic v1 fallback
 
 
 @router.post("/orders/generate")
@@ -1587,6 +1645,7 @@ async def generate_orders(
     payload: OrderGenerateRequest,
     db: AsyncSession = Depends(_db_dependency),
 ):
+    """Synchronously runs a batch of orders through _process_order; with orders_per_client set (and no explicit user_id) it fans out per selected user instead of drawing `count` random users."""
     _ensure_leader()
     await apply_chaos_latency_and_timeout()
     count = max(1, min(payload.count, 100000))

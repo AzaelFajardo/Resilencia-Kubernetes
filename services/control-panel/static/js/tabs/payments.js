@@ -1,3 +1,4 @@
+// EN: Payments tab — search, list, and delete.
 // payments.js — Pagos: búsqueda, listado y borrado.
 
 import { mountEntity } from '../entity.js';

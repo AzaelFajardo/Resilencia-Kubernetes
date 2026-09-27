@@ -68,6 +68,8 @@ TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
 
 
 async def apply_chaos():
+    """Injects configured latency, simulated timeouts, and/or random failures
+    into the current request, per the FAILURE_RATE/LATENCY_MS/TIMEOUT_RATE knobs."""
     if LATENCY_MS > 0:
         await asyncio.sleep(LATENCY_MS / 1000.0)
 
@@ -337,6 +339,7 @@ async def get_customer_or_404(customer_id: int, db: AsyncSession) -> Customer:
 
 
 def build_customer_model(data: dict) -> Customer:
+    """Builds a Customer from stored JSONB data, supporting both Pydantic v1 and v2."""
     if hasattr(Customer, "model_validate"):
         return Customer.model_validate(data)
     return Customer.parse_obj(data)

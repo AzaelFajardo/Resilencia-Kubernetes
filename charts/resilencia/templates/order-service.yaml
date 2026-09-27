@@ -1,3 +1,6 @@
+# Deployment + Service for order-service, templated separately from the
+# other microservices because it has extra env vars, resource limits and
+# looser probe timings (see values.yaml: orderService.*).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

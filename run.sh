@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # =====================================================================
+# run.sh -- macOS/Linux startup helper for Resilencia-Kubernetes.
+# Wraps `docker compose` (and delegates to scripts/up.sh & scripts/down.sh
+# for the optional Kubernetes flow) to build, start, stop and reset the stack.
+# =====================================================================
 # run.sh  –  Helper de arranque para Resilencia-Kubernetes (macOS/Linux)
 #
 # Uso:

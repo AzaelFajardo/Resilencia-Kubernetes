@@ -1,3 +1,8 @@
+"""payment-service: simulates and persists payments for orders, including
+tax/subtotal computation, a lightweight fraud check, chaos-injection
+(latency/timeout/failure) for resilience testing, and the leader-election
+orchestrator hook shared across services."""
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -34,6 +39,8 @@ ZERO_MONEY = Decimal("0.00")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Creates tables on startup and registers this service with the shared
+    orchestrator (leader election) for the duration of the app's lifetime."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     configure(
@@ -54,6 +61,7 @@ app = FastAPI(title="payment-service", lifespan=lifespan)
 setup_tracing(app, "payment-service")
 Instrumentator().instrument(app).expose(app)
 
+# Chaos-injection knobs, mutable at runtime via /chaos/config for resilience testing.
 FAILURE_RATE = float(os.getenv("FAILURE_RATE", "0.0"))
 LATENCY_MS = int(os.getenv("LATENCY_MS", "0"))
 TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
@@ -61,11 +69,15 @@ USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user-service:8000")
 
 
 class IpGeolocation(BaseModel):
+    """Nested geolocation derived from the client IP address."""
+
     city: str
     country: str
 
 
 class SecurityContext(BaseModel):
+    """Security and risk-assessment fields attached to every payment response."""
+
     fraud_score: int
     session_id: str
     device_fingerprint: str
@@ -78,6 +90,8 @@ class SecurityContext(BaseModel):
 
 
 class RequestMetadata(BaseModel):
+    """Request metadata and tracing fields attached to every payment response."""
+
     trace_id: str
     request_id: str
     source_system: str
@@ -91,12 +105,16 @@ class RequestMetadata(BaseModel):
 
 
 class BillingAddress(BaseModel):
+    """Billing address rendered in the payment response."""
+
     street: str
     city: str
     zip: str
 
 
 class PaymentDetails(BaseModel):
+    """Simulated payment details returned to the caller and persisted to the database."""
+
     order_total: float
     subtotal: float
     tax_amount: float
@@ -113,6 +131,9 @@ class PaymentDetails(BaseModel):
 
 
 class PaymentRequest(BaseModel):
+    """Incoming payment request; extra fields are accepted (not validated) so
+    upstream callers can pass additional context without breaking this schema."""
+
     order_id: int
     amount: float
     user_id: int
@@ -133,11 +154,15 @@ class ChaosConfig(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Confirms that the service is up and available."""
+
     status: str
     service: str
 
 
 class PaymentResponse(BaseModel):
+    """Full response envelope: metadata, security context, fraud check, and payment details."""
+
     metadata: RequestMetadata
     security: SecurityContext
     status: str
@@ -160,18 +185,21 @@ class PaymentRecordSummary(BaseModel):
 
 
 def model_dump_compat(model) -> dict:
+    """Supports both Pydantic v2 (`model_dump`) and v1 (`dict`) APIs."""
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
 
 
 def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    """Formats a datetime as UTC ISO-8601 with a trailing 'Z', or None if unset."""
     if value is None:
         return None
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def serialize_payment_record(record: PaymentRecord) -> PaymentRecordSummary:
+    """Converts a persisted PaymentRecord row into its API summary representation."""
     return PaymentRecordSummary(
         id=int(record.id),
         order_id=int(record.order_id),
@@ -183,6 +211,7 @@ def serialize_payment_record(record: PaymentRecord) -> PaymentRecordSummary:
 
 
 def build_metadata(request: Request) -> RequestMetadata:
+    """Generates request metadata/tracing fields from the incoming request."""
     return RequestMetadata(
         trace_id=str(uuid.uuid4()),
         request_id=str(uuid.uuid4()),
@@ -198,6 +227,8 @@ def build_metadata(request: Request) -> RequestMetadata:
 
 
 def build_security(request: Request, security_data: Optional[dict] = None) -> SecurityContext:
+    """Builds a simulated security context, then overlays any caller-supplied
+    security_data fields (e.g. propagated from order/user-service) on top."""
     security = SecurityContext(
         fraud_score=random.randint(0, 30),
         session_id=str(uuid.uuid4()),
@@ -213,6 +244,8 @@ def build_security(request: Request, security_data: Optional[dict] = None) -> Se
     if not security_data:
         return security
 
+    # Overwrite only the fields explicitly provided by the caller, leaving
+    # simulated defaults in place for anything omitted.
     for field in (
         "fraud_score",
         "session_id",
@@ -237,6 +270,8 @@ def build_security(request: Request, security_data: Optional[dict] = None) -> Se
 
 
 async def apply_chaos_latency_and_timeout():
+    """Injects configured artificial latency and, probabilistically, a long
+    stall (simulated timeout) before the request is handled."""
     if LATENCY_MS > 0:
         await asyncio.sleep(LATENCY_MS / 1000.0)
 
@@ -245,10 +280,14 @@ async def apply_chaos_latency_and_timeout():
 
 
 def should_simulate_failure() -> bool:
+    """Rolls the dice for a chaos-injected payment failure based on FAILURE_RATE."""
     return FAILURE_RATE > 0 and random.random() < FAILURE_RATE
 
 
 async def fetch_customer_context(user_id: int) -> tuple[dict, dict]:
+    """Fetches customer/security context from user-service. Best-effort: any
+    failure (timeout, non-200, network error) degrades to empty dicts rather
+    than failing the payment."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{USER_SERVICE_URL}/users/{user_id}", timeout=2.0)
@@ -262,7 +301,12 @@ async def fetch_customer_context(user_id: int) -> tuple[dict, dict]:
 
 
 def build_payment_details(order_total: float, customer_data: dict, coupon_code: Optional[str]) -> PaymentDetails:
+    """Derives simulated payment details from the order total: backs out
+    subtotal/tax assuming order_total is tax-inclusive at TAX_RATE, and
+    deterministically derives a fake card/provider from the total and
+    customer id so the same inputs always produce the same "card"."""
     order_total_decimal = Decimal(str(order_total)).quantize(Decimal("0.01"))
+    # order_total is tax-inclusive; recover subtotal by dividing out (1 + TAX_RATE).
     subtotal = (order_total_decimal / (Decimal("1.00") + TAX_RATE)).quantize(
         Decimal("0.01"),
         rounding=ROUND_HALF_UP,
@@ -270,6 +314,8 @@ def build_payment_details(order_total: float, customer_data: dict, coupon_code: 
     tax_amount = (order_total_decimal - subtotal).quantize(Decimal("0.01"))
     customer_id = int(customer_data.get("id", 0) or 0)
     billing_source = customer_data.get("shipping_address") or {}
+    # Deterministic pseudo-random card/expiry derived from amount + customer id
+    # (not a real PAN), so repeated requests for the same order look consistent.
     card_seed = int(order_total_decimal * 100) + customer_id
     card_last_four = f"{4000 + (card_seed % 5000):04d}"
     expiry_month = (customer_id % 12) + 1
@@ -300,6 +346,8 @@ def build_payment_details(order_total: float, customer_data: dict, coupon_code: 
 
 
 def run_fraud_check(security: SecurityContext, payment: PaymentDetails) -> dict:
+    """Evaluates a small set of simulated fraud heuristics; approval requires
+    zero triggered risk signals."""
     risk_signals = []
 
     if security.vpn_detected:
@@ -325,6 +373,8 @@ async def persist_payment(
     payment: PaymentDetails,
     status: str,
 ):
+    """Persists a payment attempt (success, decline, or failure) as a new row;
+    every outcome is recorded, not just successful payments."""
     payment_record = PaymentRecord(
         order_id=req.order_id,
         order_total=Decimal(str(payment.order_total)),
@@ -348,11 +398,13 @@ async def persist_payment(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
+    """Health endpoint for Kubernetes probes or basic checks."""
     return HealthResponse(status="ok", service="payment-service")
 
 
 @app.get("/payments/count", response_model=CountResponse)
 async def count_payments(db: AsyncSession = Depends(get_db)) -> CountResponse:
+    """Returns the total number of persisted payment records."""
     await apply_chaos_latency_and_timeout()
     total = await db.scalar(select(func.count()).select_from(PaymentRecord))
     return CountResponse(count=int(total or 0))
@@ -363,6 +415,7 @@ async def recent_payments(
     limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[PaymentRecordSummary]:
+    """Returns the most recently created payments, newest first."""
     await apply_chaos_latency_and_timeout()
     result = await db.execute(
         select(PaymentRecord)
@@ -380,6 +433,8 @@ async def list_payments(
     search: Optional[str] = Query(None, description="Busca por id de orden, estado o método"),
     db: AsyncSession = Depends(get_db),
 ) -> list[PaymentRecordSummary]:
+    """Lists payments with pagination and an optional free-text search across
+    id, order id, status, and method."""
     await apply_chaos_latency_and_timeout()
     stmt = select(PaymentRecord).order_by(PaymentRecord.id.asc())
     if search:
@@ -400,6 +455,7 @@ async def list_payments(
 
 @app.delete("/payments")
 async def delete_all_payments(db: AsyncSession = Depends(get_db)) -> dict:
+    """Deletes ALL payment records."""
     await apply_chaos_latency_and_timeout()
     await db.execute(delete(PaymentRecord))
     await db.commit()
@@ -411,6 +467,7 @@ async def delete_payment(
     payment_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """Deletes a single payment by id."""
     await apply_chaos_latency_and_timeout()
     result = await db.execute(
         select(PaymentRecord).where(PaymentRecord.id == payment_id)
@@ -428,6 +485,7 @@ async def get_payment_by_order(
     order_id: int,
     db: AsyncSession = Depends(get_db),
 ) -> PaymentRecordSummary:
+    """Returns the most recent payment for a given order id."""
     await apply_chaos_latency_and_timeout()
     result = await db.execute(
         select(PaymentRecord)
@@ -447,11 +505,17 @@ async def process_payment(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> PaymentResponse:
+    """Processes a payment for an order: builds payment/security details, runs
+    the fraud check and chaos-injected failure roll, then persists the outcome
+    regardless of whether it succeeded, was declined, or failed. Fraud decline
+    takes priority over the simulated processor failure."""
     await apply_chaos_latency_and_timeout()
 
     customer_data = req.customer or {}
     security_data = req.security or {}
 
+    # Prefer caller-supplied context; only call out to user-service for
+    # whichever piece (customer/security) wasn't already provided.
     if not customer_data or not security_data:
         fetched_customer, fetched_security = await fetch_customer_context(req.user_id)
         if not customer_data:
@@ -471,6 +535,7 @@ async def process_payment(
     fraud_result = run_fraud_check(security, payment)
     simulated_failure = should_simulate_failure()
 
+    # Fraud decline is checked first so it isn't masked by a chaos-injected failure.
     if not fraud_result["approved"]:
         response_status = "error"
         message = "Payment declined by fraud rules"
@@ -503,6 +568,7 @@ async def process_payment(
 
 @app.get("/chaos/config")
 def get_chaos_config():
+    """Returns the current chaos-injection configuration."""
     return {
         "FAILURE_RATE": FAILURE_RATE,
         "LATENCY_MS": LATENCY_MS,
@@ -512,6 +578,8 @@ def get_chaos_config():
 
 @app.post("/chaos/config")
 def update_chaos_config(config: ChaosConfig):
+    """Updates chaos-injection settings at runtime; only fields present in the
+    request body are changed, others keep their current value."""
     global FAILURE_RATE, LATENCY_MS, TIMEOUT_RATE
 
     if config.FAILURE_RATE is not None:

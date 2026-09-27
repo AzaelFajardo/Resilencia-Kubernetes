@@ -1,3 +1,5 @@
+# HorizontalPodAutoscalers scaling order-service and payment-service on CPU
+# utilization, using thresholds from values.yaml (hpa.*).
 {{- range (list "order-service" "payment-service") }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

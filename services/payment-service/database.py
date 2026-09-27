@@ -1,3 +1,6 @@
+"""payment-service database layer: async SQLAlchemy engine, session factory,
+and the PaymentRecord ORM model persisted for each simulated payment."""
+
 import os
 
 from sqlalchemy import Column, DateTime, Integer, Numeric, String, text
@@ -11,6 +14,7 @@ db_url = os.getenv("DATABASE_URL")
 if not db_url:
     raise RuntimeError("DATABASE_URL environment variable is required")
 if db_url.startswith("postgresql://"):
+    # asyncpg requires the +asyncpg dialect suffix; plain postgresql:// is sync-only.
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 engine = create_async_engine(db_url, echo=True)
@@ -25,6 +29,7 @@ Base = declarative_base()
 
 
 async def get_db():
+    """FastAPI dependency yielding a request-scoped async session; always closed after use."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -33,6 +38,8 @@ async def get_db():
 
 
 class PaymentRecord(Base):
+    """Persisted record of a single simulated payment attempt for an order."""
+
     __tablename__ = "payments"
 
     id = Column(Integer, primary_key=True, index=True)

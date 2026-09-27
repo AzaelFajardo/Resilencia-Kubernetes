@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# English summary: orderly shutdown of Resilencia-Kubernetes (Docker Compose
+# and, optionally, the minikube cluster) without discarding data or manifests.
 # =====================================================================
 # scripts/down.sh - Detencion ordenada de Resilencia-Kubernetes
 #

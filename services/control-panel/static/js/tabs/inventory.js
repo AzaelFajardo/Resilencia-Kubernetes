@@ -1,3 +1,4 @@
+// EN: Inventory tab — search, list, Faker generation, and editing.
 // inventory.js — Inventario: búsqueda, listado, fakers y edición.
 
 import { mountEntity } from '../entity.js';

@@ -1,3 +1,5 @@
+// k6 stress test: ramps virtual users up to 200 and back down against
+// POST /orders to observe behavior under increasing load.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 

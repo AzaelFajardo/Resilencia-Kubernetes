@@ -1,3 +1,8 @@
+"""order-service database layer - async SQLAlchemy engine/session setup plus
+ORM models for the `orders` table and read-only mappings onto tables owned
+by user-service and inventory-service (shared Postgres instance).
+"""
+
 import enum
 import os
 
@@ -22,6 +27,8 @@ db_url = os.getenv("DATABASE_URL")
 if not db_url:
     raise RuntimeError("DATABASE_URL environment variable is required")
 if db_url.startswith("postgresql://"):
+    # asyncpg needs the +asyncpg dialect suffix; compose.yml supplies the
+    # plain postgresql:// scheme, so the driver is swapped in here.
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 engine = create_async_engine(db_url, echo=True)
@@ -36,6 +43,7 @@ Base = declarative_base()
 
 
 class OrderStatus(str, enum.Enum):
+    """Lifecycle states for an order; mirrors the `order_status` Postgres enum type."""
     pending = "pending"
     confirmed = "confirmed"
     processing = "processing"
@@ -47,6 +55,7 @@ class OrderStatus(str, enum.Enum):
 
 
 async def get_db():
+    """FastAPI dependency yielding a request-scoped async session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -55,6 +64,7 @@ async def get_db():
 
 
 class Order(Base):
+    """Primary orders table owned by this service."""
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, index=True)

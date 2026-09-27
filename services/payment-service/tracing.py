@@ -1,3 +1,6 @@
+"""payment-service tracing setup: configures the OpenTelemetry TracerProvider,
+OTLP exporter, and auto-instrumentation for FastAPI, HTTPX, and SQLAlchemy."""
+
 import os
 from fastapi import FastAPI
 from opentelemetry import trace
@@ -6,6 +9,7 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ALWAYS_OFF, ParentBased,
 from opentelemetry.sdk.resources import Resource
 
 def _build_sampler():
+    """Maps the configured sampler name/ratio to a concrete OTel Sampler instance."""
     # OTEL_TRACES_SAMPLER/OTEL_TRACES_SAMPLER_ARG (Phase 11) - standard OTel
     # env vars, read by hand since this project builds TracerProvider itself.
     name = os.getenv("OTEL_TRACES_SAMPLER", "parentbased_always_on")
@@ -29,6 +33,8 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 def setup_tracing(app: FastAPI, service_name: str):
+    """Wires OpenTelemetry into the given FastAPI app: tracer provider, OTLP
+    exporter, and instrumentation for FastAPI/HTTPX/SQLAlchemy."""
     # Setup Resource and Tracer Provider
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource, sampler=_build_sampler())
@@ -46,6 +52,8 @@ def setup_tracing(app: FastAPI, service_name: str):
     # Instrument HTTPX (globally)
     HTTPXClientInstrumentor().instrument()
 
+    # Best-effort: SQLAlchemy instrumentation can fail if called more than once
+    # per process, which shouldn't crash service startup.
     try:
         SQLAlchemyInstrumentor().instrument()
     except Exception:

@@ -1,3 +1,7 @@
+# Kubernetes Deployments for the five microservices (user, inventory,
+# payment, notification, order) and the observability stack (otel-collector,
+# prometheus, grafana, jaeger).
+#
 # DEV-ONLY credentials.
 # This project is a fully local simulation and is NEVER deployed to the
 # internet. These are development defaults so anyone can clone and run it.

@@ -1,3 +1,6 @@
+# Prometheus configuration for the local stack: scrapes otel-collector's
+# metrics endpoint and each microservice, and loads alerting rules from
+# alerts.yml.
 global:
   scrape_interval: 1s
   evaluation_interval: 5s

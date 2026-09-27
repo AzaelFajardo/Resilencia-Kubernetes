@@ -1,3 +1,4 @@
+// EN: Testing tab — bulk orders, continuous traffic simulation, resilience, and chaos.
 // pruebas.js — Pruebas: pedidos en lote, tráfico continuo, resiliencia y caos.
 
 import { API } from '../api.js';

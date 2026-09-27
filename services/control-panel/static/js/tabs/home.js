@@ -1,3 +1,5 @@
+// EN: Home tab — live service-flow diagram, per-service start/stop controls,
+// and system summary.
 // home.js — Inicio: flujo de servicios en vivo (árbol vertical), controles de
 // ciclo de vida por servicio y resumen del sistema.
 

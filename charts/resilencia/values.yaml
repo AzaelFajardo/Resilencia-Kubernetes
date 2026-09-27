@@ -1,3 +1,5 @@
+# Default values for the resilencia Helm chart.
+# See templates/*.yaml for how each key is consumed.
 image:
   pullPolicy: Never
   tag: latest

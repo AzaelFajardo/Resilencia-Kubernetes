@@ -1,3 +1,4 @@
+// EN: Orders tab — place an order, per-user history, list/search, and bulk generation.
 // orders.js — Órdenes: colocar, historial, listado/búsqueda y generación masiva.
 
 import { API } from '../api.js';

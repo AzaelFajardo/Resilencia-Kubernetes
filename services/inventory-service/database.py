@@ -1,3 +1,7 @@
+"""inventory-service database layer - async SQLAlchemy engine/session setup
+plus the `products` table used for catalog and stock data.
+"""
+
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
@@ -25,6 +29,8 @@ AsyncSessionLocal = async_sessionmaker(
 Base = declarative_base()
 
 class Product(Base):
+    """Product catalog table; `quantity` is a dedicated column (for atomic
+    reserve/release updates) while the remaining 24 fields live in `data` (JSONB)."""
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -32,6 +38,7 @@ class Product(Base):
     data = Column(JSONB, nullable=False)
 
 async def get_db():
+    """FastAPI dependency yielding a request-scoped async session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session

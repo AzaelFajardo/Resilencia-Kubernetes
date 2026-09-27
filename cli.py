@@ -62,10 +62,13 @@ SERVICE_ALIASES = {v["full_name"]: k for k, v in SERVICES.items()}
 
 
 class ApiError(Exception):
+    """Raised when a service cannot be reached at all (as opposed to a non-2xx response)."""
     pass
 
 
 def resolve_service(name: str) -> str:
+    """Accept either the short key ("order") or the full compose service name
+    ("order-service") and return the canonical short key."""
     key = SERVICE_ALIASES.get(name, name)
     if key not in SERVICES:
         valid = sorted(set(SERVICES) | set(SERVICE_ALIASES))
@@ -74,10 +77,13 @@ def resolve_service(name: str) -> str:
 
 
 def base_url(service_key: str) -> str:
+    """Host-exposed base URL for a service, per .env.example port mapping."""
     return f"http://{HOST}:{SERVICES[service_key]['port']}"
 
 
 def http_request(method: str, url: str, payload: Optional[dict] = None, timeout: float = 10.0):
+    """Issue an HTTP request and return (status, body) for both success and
+    error responses; only unreachable hosts/timeouts raise ApiError."""
     data = None
     headers = {}
     if payload is not None:
@@ -103,10 +109,16 @@ def http_request(method: str, url: str, payload: Optional[dict] = None, timeout:
 
 
 def print_json(data: Any) -> None:
+    """Pretty-print a JSON-serializable API response for terminal output."""
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def confirm(prompt: str, assume_yes: bool) -> bool:
+    """Gate a destructive action (chaos injection/reset) behind an interactive
+    y/N prompt. Passing --yes/-y on the command line sets assume_yes and skips
+    the prompt entirely, so scripts and CI can drive chaos commands
+    non-interactively without hanging on stdin.
+    """
     if assume_yes:
         return True
     answer = input(f"{prompt} [y/N] ").strip().lower()
@@ -116,6 +128,7 @@ def confirm(prompt: str, assume_yes: bool) -> bool:
 # ── status ──────────────────────────────────────────────────────────────
 
 def cmd_status(_args: argparse.Namespace) -> int:
+    """Print health and record counts for every microservice."""
     print("Service health:")
     for key, info in SERVICES.items():
         url = f"{base_url(key)}/health"
@@ -148,18 +161,21 @@ def cmd_status(_args: argparse.Namespace) -> int:
 # ── users ───────────────────────────────────────────────────────────────
 
 def cmd_users_generate(_args: argparse.Namespace) -> int:
+    """Trigger the user-service's built-in mock user generation."""
     status, body = http_request("POST", f"{base_url('user')}/users/generate")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_users_recent(args: argparse.Namespace) -> int:
+    """List the most recently created users."""
     status, body = http_request("GET", f"{base_url('user')}/users/recent?limit={args.limit}")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_users_orders(args: argparse.Namespace) -> int:
+    """List order history for a single customer."""
     status, body = http_request("GET", f"{base_url('user')}/users/{args.user_id}/orders?limit={args.limit}")
     print_json(body)
     return 0 if status == 200 else 1
@@ -168,18 +184,21 @@ def cmd_users_orders(args: argparse.Namespace) -> int:
 # ── inventory ───────────────────────────────────────────────────────────
 
 def cmd_inventory_generate(_args: argparse.Namespace) -> int:
+    """Trigger the inventory-service's built-in mock product generation."""
     status, body = http_request("POST", f"{base_url('inventory')}/inventory/generate")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_inventory_list(args: argparse.Namespace) -> int:
+    """List products regardless of stock level."""
     status, body = http_request("GET", f"{base_url('inventory')}/inventory?limit={args.limit}")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_inventory_stock(args: argparse.Namespace) -> int:
+    """List only products currently in stock."""
     status, body = http_request("GET", f"{base_url('inventory')}/inventory/stock?limit={args.limit}")
     print_json(body)
     return 0 if status == 200 else 1
@@ -188,6 +207,7 @@ def cmd_inventory_stock(args: argparse.Namespace) -> int:
 # ── orders ──────────────────────────────────────────────────────────────
 
 def cmd_order_place(args: argparse.Namespace) -> int:
+    """Place an order through the normal order-service flow (not a direct DB write)."""
     payload = {
         "user_id": args.user_id,
         "product_id": args.product_id,
@@ -199,18 +219,21 @@ def cmd_order_place(args: argparse.Namespace) -> int:
 
 
 def cmd_orders_recent(args: argparse.Namespace) -> int:
+    """List the most recently placed orders."""
     status, body = http_request("GET", f"{base_url('order')}/orders/recent?limit={args.limit}")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_orders_count(_args: argparse.Namespace) -> int:
+    """Print the total number of orders."""
     status, body = http_request("GET", f"{base_url('order')}/orders/count")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_orders_get(args: argparse.Namespace) -> int:
+    """Fetch a single order by id."""
     status, body = http_request("GET", f"{base_url('order')}/orders/{args.order_id}")
     print_json(body)
     return 0 if status == 200 else 1
@@ -219,18 +242,21 @@ def cmd_orders_get(args: argparse.Namespace) -> int:
 # ── payments ────────────────────────────────────────────────────────────
 
 def cmd_payments_recent(args: argparse.Namespace) -> int:
+    """List the most recent payments."""
     status, body = http_request("GET", f"{base_url('payment')}/payments/recent?limit={args.limit}")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_payments_count(_args: argparse.Namespace) -> int:
+    """Print the total number of payments."""
     status, body = http_request("GET", f"{base_url('payment')}/payments/count")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_payments_by_order(args: argparse.Namespace) -> int:
+    """Fetch the payment record associated with an order."""
     status, body = http_request("GET", f"{base_url('payment')}/payments/by-order/{args.order_id}")
     print_json(body)
     return 0 if status == 200 else 1
@@ -239,6 +265,7 @@ def cmd_payments_by_order(args: argparse.Namespace) -> int:
 # ── notifications ───────────────────────────────────────────────────────
 
 def cmd_notifications_recent(args: argparse.Namespace) -> int:
+    """List the most recent notifications."""
     status, body = http_request(
         "GET", f"{base_url('notification')}/notifications/recent?limit={args.limit}"
     )
@@ -247,12 +274,14 @@ def cmd_notifications_recent(args: argparse.Namespace) -> int:
 
 
 def cmd_notifications_count(_args: argparse.Namespace) -> int:
+    """Print the total number of notifications."""
     status, body = http_request("GET", f"{base_url('notification')}/notifications/count")
     print_json(body)
     return 0 if status == 200 else 1
 
 
 def cmd_notifications_by_order(args: argparse.Namespace) -> int:
+    """Fetch the notification record associated with an order."""
     status, body = http_request(
         "GET", f"{base_url('notification')}/notifications/by-order/{args.order_id}"
     )
@@ -263,12 +292,16 @@ def cmd_notifications_by_order(args: argparse.Namespace) -> int:
 # ── chaos ───────────────────────────────────────────────────────────────
 
 def target_services(name: str, apply_all: bool) -> list[str]:
+    """Resolve the chaos/reset command's target: every service, or just one."""
     if apply_all:
         return list(SERVICES.keys())
     return [resolve_service(name)]
 
 
 def cmd_chaos_set(args: argparse.Namespace) -> int:
+    """Inject chaos (failure rate/latency/timeout rate) into one service or
+    all of them. Requires interactive confirmation unless -y/--yes is passed,
+    since this mutates live runtime behavior of the running stack."""
     if not args.all and not args.service:
         print("error: specify a service name or --all", file=sys.stderr)
         return 2
@@ -287,6 +320,7 @@ def cmd_chaos_set(args: argparse.Namespace) -> int:
 
     targets = target_services(args.service, args.all)
     scope = "ALL services" if args.all else SERVICES[targets[0]]["full_name"]
+    # Destructive/impactful action: confirm unless the caller opted out via --yes.
     if not confirm(f"This will change live chaos configuration on {scope}: {payload}. Continue?", args.yes):
         print("Cancelled.")
         return 1
@@ -300,12 +334,16 @@ def cmd_chaos_set(args: argparse.Namespace) -> int:
             if status != 200:
                 exit_code = 1
         except ApiError as exc:
+            # Keep applying to remaining targets; report the failure via exit code.
             print(f"{SERVICES[key]['full_name']}: {exc}")
             exit_code = 1
     return exit_code
 
 
 def cmd_chaos_reset(args: argparse.Namespace) -> int:
+    """Reset chaos configuration to zero on one service or all of them,
+    undoing whatever cmd_chaos_set previously injected. Same -y/--yes
+    confirmation bypass as chaos set."""
     if not args.all and not args.service:
         print("error: specify a service name or --all", file=sys.stderr)
         return 2
@@ -334,6 +372,8 @@ def cmd_chaos_reset(args: argparse.Namespace) -> int:
 # ── circuit breaker ─────────────────────────────────────────────────────
 
 def cmd_circuit_breaker_status(_args: argparse.Namespace) -> int:
+    """Show order-service's circuit breaker state for calls to payment-service
+    (open/closed/half-open), useful for observing resilience behavior under chaos."""
     status, body = http_request("GET", f"{base_url('order')}/circuit-breaker/payment")
     print_json(body)
     return 0 if status == 200 else 1
@@ -342,6 +382,8 @@ def cmd_circuit_breaker_status(_args: argparse.Namespace) -> int:
 # ── argument parser ─────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
+    """Assemble the full subcommand tree (status/users/inventory/order/
+    payments/notifications/chaos/circuit-breaker)."""
     parser = argparse.ArgumentParser(
         prog="cli.py",
         description="Terminal control surface for Resilencia-Kubernetes.",
@@ -434,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    """Entry point: parse args, dispatch to the selected subcommand handler,
+    and translate unreachable-service/interrupt errors into exit codes."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

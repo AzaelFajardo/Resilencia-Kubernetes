@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# English summary: full startup of Resilencia-Kubernetes (minikube cluster,
+# image build/load, k8s manifests, then the Docker Compose stack).
 # =====================================================================
 # scripts/up.sh - Arranque completo de Resilencia-Kubernetes
 #

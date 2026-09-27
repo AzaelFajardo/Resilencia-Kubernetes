@@ -1,3 +1,7 @@
+"""order-service tracing setup - configures the OpenTelemetry TracerProvider,
+OTLP exporter, and auto-instrumentation for FastAPI, HTTPX, and SQLAlchemy.
+"""
+
 import os
 from fastapi import FastAPI
 from opentelemetry import trace
@@ -6,6 +10,7 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ALWAYS_OFF, ParentBased,
 from opentelemetry.sdk.resources import Resource
 
 def _build_sampler():
+    """Builds the trace sampler from env vars, defaulting to parent-based always-on."""
     # OTEL_TRACES_SAMPLER/OTEL_TRACES_SAMPLER_ARG (Phase 11) - standard OTel
     # env vars. Only the SDK's own auto-instrumentation CLI reads these
     # automatically; this project builds its TracerProvider by hand, so it
@@ -32,6 +37,8 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 def setup_tracing(app: FastAPI, service_name: str):
+    """Wires OpenTelemetry tracing into `app`: provider, OTLP exporter, and
+    auto-instrumentation for FastAPI, HTTPX, and SQLAlchemy."""
     # Setup Resource and Tracer Provider
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource, sampler=_build_sampler())

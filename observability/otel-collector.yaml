@@ -1,3 +1,6 @@
+# OpenTelemetry Collector pipeline: receives OTLP telemetry from the
+# microservices, batches it, and exports traces to Jaeger and metrics for
+# Prometheus to scrape.
 # Receives telemetry from the microservices over OTLP.
 receivers:
   otlp:

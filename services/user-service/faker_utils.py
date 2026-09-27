@@ -12,18 +12,23 @@ _fake = Faker(["es_MX", "en_US"])
 
 
 def _to_utc_iso(dt):
+    """Formats a datetime as a UTC ISO-8601 string, or None if `dt` is None."""
     if dt is None:
         return None
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def gen_customer(user_id: int) -> dict:
+    """Generates one synthetic customer record matching the Customer model's 20 fields."""
     account_created_at = _fake.date_time_between(start_date="-3y", end_date="-30d")
     last_login_at = None
     suffix = _fake.suffix() if _fake.boolean(chance_of_getting_true=30) else None
     if suffix is not None and not str(suffix).strip():
+        # Faker can return a blank suffix string; normalize that to None.
         suffix = None
     if _fake.boolean(chance_of_getting_true=85):
+        # Most accounts have logged in since creation; the remaining 15%
+        # simulate never-returning users and keep last_login_at as None.
         last_login_at = _fake.date_time_between(start_date=account_created_at, end_date="now")
 
     return {
@@ -54,5 +59,6 @@ def gen_customer(user_id: int) -> dict:
 
 
 def iter_user_records(count: int, start_id: int):
+    """Yields `count` generated customer records with sequential ids from `start_id`."""
     for user_id in range(start_id, start_id + count):
         yield gen_customer(user_id)

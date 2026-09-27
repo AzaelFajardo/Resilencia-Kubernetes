@@ -1,3 +1,6 @@
+// EN: Observability tab — latency, throughput, resources, alerts, Prometheus
+// targets, and embedded Grafana. Refresh is configurable per sub-section;
+// disk usage (slow, read via the Docker socket) updates separately.
 // observability.js — Observabilidad: latencia, throughput, recursos, alertas,
 // objetivos de Prometheus y Grafana embebido. El refresco es controlable por
 // pestaña; el disco (lento, socket Docker) se actualiza aparte.

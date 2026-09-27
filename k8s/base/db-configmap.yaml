@@ -1,3 +1,5 @@
+# ConfigMap providing the PostgreSQL bootstrap script (schema, indexes and
+# seed rows) mounted by postgres.yaml into /docker-entrypoint-initdb.d/.
 apiVersion: v1
 data:
   init.sql: |

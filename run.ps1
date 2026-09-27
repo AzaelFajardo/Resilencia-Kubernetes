@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------
+# run.ps1 -- Windows startup helper for Resilencia-Kubernetes.
+# Wraps `docker compose` to build, start, stop, reset and inspect the stack.
+# -----------------------------------------------------------------------
 <#
 .SYNOPSIS
   Helper de arranque multiplataforma para Resilencia-Kubernetes (Windows).

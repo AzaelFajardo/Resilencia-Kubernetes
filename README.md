@@ -472,6 +472,8 @@ El esquema (`db/init.sql`) usa tipos especificos de PostgreSQL (JSONB, enums y p
 
 ## Documentacion relacionada
 
+- [`GUIA_DE_USO.md`](GUIA_DE_USO.md) — guia de uso en espanol (resumen, instalacion, arranque, solucion de problemas)
+- [`USAGE_GUIDE.md`](USAGE_GUIDE.md) — English usage guide (overview, setup, run, troubleshooting)
 - `docs/00. setup.md`
 - `docs/01.Arquitectura.md`
 - `docs/services/*.md`

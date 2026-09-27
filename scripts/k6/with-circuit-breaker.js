@@ -1,3 +1,5 @@
+// k6 load test that injects a high payment-service failure rate to verify
+// the order-service circuit breaker opens and rejects calls fast.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';

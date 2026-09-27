@@ -1,3 +1,5 @@
+# HorizontalPodAutoscalers that scale order-service and payment-service on
+# CPU utilization (requires the metrics-server addon on the cluster).
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

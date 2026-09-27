@@ -1,3 +1,8 @@
+"""user-service database layer - async SQLAlchemy engine/session setup plus
+the local `users` table and a read-only mapping onto order-service's
+`orders` table (shared Postgres instance).
+"""
+
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
@@ -25,6 +30,7 @@ AsyncSessionLocal = async_sessionmaker(
 Base = declarative_base()
 
 class User(Base):
+    """Customer profile table; the full profile (20 fields) lives in `data` (JSONB)."""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -48,6 +54,7 @@ class Order(Base):
     created_at = Column(TIMESTAMP(timezone=True), nullable=False)
 
 async def get_db():
+    """FastAPI dependency yielding a request-scoped async session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session

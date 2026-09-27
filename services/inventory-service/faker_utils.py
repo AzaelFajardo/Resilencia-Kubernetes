@@ -15,6 +15,7 @@ _SIZES = ["XS", "S", "M", "L", "XL", "XXL", "compact", "standard", "full_size", 
 
 
 def gen_product(product_id: int) -> dict:
+    """Generates one synthetic product record matching the Product model's 25 fields."""
     quantity = _fake.pyint(min_value=0, max_value=500)
     return {
         "product_id": product_id,
@@ -37,7 +38,7 @@ def gen_product(product_id: int) -> dict:
         "currency": "MXN",
         "manufacturer": _fake.company(),
         "ean13": _fake.ean13(),
-        "stock_at_ordering": quantity,
+        "stock_at_ordering": quantity,  # snapshot of quantity at generation time
         "estimated_restock_date": _fake.future_date(end_date="+120d").isoformat() if _fake.boolean(chance_of_getting_true=70) else None,
         "material": _fake.random_element(_MATERIALS),
         "color": _fake.random_element(_COLORS),
@@ -48,5 +49,6 @@ def gen_product(product_id: int) -> dict:
 
 
 def iter_product_records(count: int, start_id: int):
+    """Yields `count` generated product records with sequential ids from `start_id`."""
     for product_id in range(start_id, start_id + count):
         yield gen_product(product_id)

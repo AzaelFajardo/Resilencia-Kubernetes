@@ -1,3 +1,6 @@
+# Observability stack: Prometheus, otel-collector and Grafana ConfigMaps,
+# plus the Deployments/Services for Prometheus, Grafana, otel-collector and
+# Jaeger.
 apiVersion: v1
 kind: ConfigMap
 metadata:

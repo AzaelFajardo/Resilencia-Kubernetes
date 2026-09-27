@@ -68,6 +68,8 @@ TIMEOUT_RATE = float(os.getenv("TIMEOUT_RATE", "0.0"))
 
 
 async def apply_chaos():
+    """Injects configured latency, simulated timeouts, and/or random failures
+    into the current request, per the FAILURE_RATE/LATENCY_MS/TIMEOUT_RATE knobs."""
     if LATENCY_MS > 0:
         await asyncio.sleep(LATENCY_MS / 1000.0)
 
@@ -306,6 +308,8 @@ def build_security(request: Request) -> SecurityContext:
 
 
 async def get_db_product_or_404(product_id: int, db: AsyncSession) -> DBProduct:
+    """Looks up the raw ORM row (not the response model) so callers can mutate
+    quantity/data in place, e.g. for reserve/release/patch operations."""
     result = await db.execute(select(DBProduct).filter(DBProduct.id == product_id))
     db_product = result.scalars().first()
     if db_product is None:
@@ -313,6 +317,8 @@ async def get_db_product_or_404(product_id: int, db: AsyncSession) -> DBProduct:
     return db_product
 
 def construct_product_model(db_product: DBProduct) -> Product:
+    """Builds a Product from a DB row, overlaying the dedicated `quantity`
+    column onto `data` since it's the source of truth for stock levels."""
     data = db_product.data.copy()
     data['quantity'] = db_product.quantity
     if hasattr(Product, "model_validate"):

@@ -1,3 +1,11 @@
+"""
+seed_database.py - Idempotent startup seeder for Resilencia-Kubernetes.
+
+Runs once per container start to ensure the users/products tables hold at
+least SEED_USERS_COUNT/SEED_PRODUCTS_COUNT rows, generating only the missing
+records so re-runs and restarts never duplicate data.
+"""
+
 from __future__ import annotations
 
 import os
@@ -8,9 +16,11 @@ from typing import Iterable
 import psycopg
 from psycopg.types.json import Jsonb
 
-import generate_data
+import generate_data  # reuse the same Faker-based generator as scripts/generate_data.py
 
 
+# All seeding behavior is env-driven so it can be tuned per environment
+# (docker-compose vs. Kubernetes) without code changes.
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
@@ -24,10 +34,12 @@ BATCH_SIZE = int(os.getenv("SEED_BATCH_SIZE", "1000"))
 
 
 def log(message: str):
+    """Print a progress line with a [seed] prefix, flushed immediately for container logs."""
     print(f"[seed] {message}", flush=True)
 
 
 def validate_config():
+    """Fail fast on invalid env-configured seed targets/batch size before touching the database."""
     if SEED_USERS_COUNT < 0:
         raise ValueError("SEED_USERS_COUNT must be 0 or greater")
     if SEED_PRODUCTS_COUNT < 0:
@@ -37,6 +49,12 @@ def validate_config():
 
 
 def wait_for_postgres():
+    """Poll the database with a trivial query until it accepts connections.
+
+    Needed because this seeder starts as its own container step and Postgres
+    may still be initializing; retries with a fixed delay instead of failing
+    immediately on the first connection attempt.
+    """
     last_error = None
 
     for attempt in range(1, CONNECT_RETRIES + 1):
@@ -55,12 +73,15 @@ def wait_for_postgres():
 
 
 def fetch_count_and_max_id(cur, table_name: str) -> tuple[int, int]:
+    """Return (row count, highest id) for a table, used to compute how many
+    records are missing and where newly generated ids should start."""
     cur.execute(f"SELECT COUNT(*), COALESCE(MAX(id), 0) FROM {table_name};")
     current_count, max_id = cur.fetchone()
     return int(current_count), int(max_id)
 
 
 def chunked(iterable: Iterable[tuple], size: int):
+    """Group an iterable into lists of at most `size` items, for batched executemany() calls."""
     batch = []
     for item in iterable:
         batch.append(item)
@@ -72,6 +93,13 @@ def chunked(iterable: Iterable[tuple], size: int):
 
 
 def seed_users(cur):
+    """Top up the users table to SEED_USERS_COUNT, generating only the shortfall.
+
+    Idempotency: re-running (e.g. on container restart) compares the current
+    row count against the target instead of unconditionally inserting, and new
+    rows start at max(id)+1, so this is safe to run repeatedly without
+    duplicating or overwriting existing data.
+    """
     current_count, max_id = fetch_count_and_max_id(cur, "users")
     target_count = SEED_USERS_COUNT
     missing_count = max(target_count - current_count, 0)
@@ -104,6 +132,9 @@ def seed_users(cur):
 
 
 def seed_products(cur):
+    """Top up the products table to SEED_PRODUCTS_COUNT, generating only the
+    shortfall. Same idempotency approach as seed_users (count vs. target,
+    new ids continue from max(id)+1)."""
     current_count, max_id = fetch_count_and_max_id(cur, "products")
     target_count = SEED_PRODUCTS_COUNT
     missing_count = max(target_count - current_count, 0)
@@ -139,6 +170,8 @@ def seed_products(cur):
 
 
 def main():
+    """Entry point: validate config, wait for the database, then seed users
+    and products in a single transaction (committed only if both succeed)."""
     validate_config()
 
     if not SEED_ENABLED:

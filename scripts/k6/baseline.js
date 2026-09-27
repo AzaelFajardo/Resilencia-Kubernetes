@@ -1,3 +1,5 @@
+// k6 baseline load test: steady traffic against POST /orders with no
+// injected chaos, used as the reference point for the other k6 scripts.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 

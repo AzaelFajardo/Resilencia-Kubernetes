@@ -1,3 +1,5 @@
+// k6 load test with moderate payment-service failures, used to measure the
+// error-rate improvement from order-service's retry logic.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
