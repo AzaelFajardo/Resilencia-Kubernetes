@@ -46,7 +46,7 @@ export function render(view) {
             Tasa de fallo (%) <input id="c-fr" type="number" step="1" min="0" max="100" placeholder="0">
           </label>
           <label data-tip="Retardo artificial añadido a cada petición. Se mide en milisegundos (ms). 0 = sin retardo.">
-            Latencia (ms) <input id="c-lm" type="number" step="100" min="0" placeholder="0">
+            Latencia (ms) <input id="c-lm" type="number" step="1" min="0" placeholder="0">
           </label>
           <label data-tip="Probabilidad de que el servicio simule un timeout: se queda esperando 30 segundos antes de responder. Se mide en porcentaje (0 a 100%).">
             Tasa de timeout (%) <input id="c-tr" type="number" step="1" min="0" max="100" placeholder="0">
@@ -64,7 +64,7 @@ export function render(view) {
             Tasa de fallo (%) <input id="g-fr" type="number" step="1" min="0" max="100" placeholder="0">
           </label>
           <label data-tip="Retardo artificial añadido a cada petición de todos los servicios. Se mide en milisegundos (ms).">
-            Latencia (ms) <input id="g-lm" type="number" step="100" min="0" placeholder="0">
+            Latencia (ms) <input id="g-lm" type="number" step="1" min="0" placeholder="0">
           </label>
           <label data-tip="Probabilidad de que cada servicio simule un timeout (espera 30 s). Se mide en porcentaje (0 a 100%).">
             Tasa de timeout (%) <input id="g-tr" type="number" step="1" min="0" max="100" placeholder="0">
